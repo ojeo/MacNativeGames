@@ -15,7 +15,10 @@ sys.path.insert(0, str(ROOT / 'third_party/d2r'))
 from relr import decode_relr
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--version', choices=('v0','v112','v121','v143','botw160','botw190'), default='v0')
-version = parser.parse_args().version
+parser.add_argument('--tree', type=Path, help='work tree with the verified inputs (default: the game folder)')
+args = parser.parse_args()
+version = args.version
+if args.tree: ROOT = args.tree.resolve()
 OUT = ROOT / f'build/game-data/{version}'
 OUT.mkdir(parents=True, exist_ok=True)
 report = json.loads((ROOT / ('analysis/phase12-validation.json' if version == 'v0' else f'analysis/{version}-port/phase12-validation.json')).read_text())
@@ -36,7 +39,7 @@ for name in ['main', 'subsdk0', 'sdk']:
     path = ROOT / f'rewritten/{version}/{name}.patched.bin'
     image = path.read_bytes()
     digest = hashlib.sha256(image).hexdigest()
-    assert digest == report['module_file_sha256'][str(path.relative_to(ROOT))], 'Unverified rewrite'
+    assert digest == report['module_file_sha256'][path.relative_to(ROOT).as_posix()], 'Unverified rewrite'
     inv = json.loads((ROOT / f'extracted/{version}/elf/{name}-inventory.json').read_text())
     layout = {}
     for line in (ROOT / f'rewritten/{version}/{name}.fixups.tsv').read_text().splitlines():

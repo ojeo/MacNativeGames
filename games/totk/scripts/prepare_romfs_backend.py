@@ -6,8 +6,11 @@ from pathlib import Path
 root=Path(__file__).resolve().parents[1]
 parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--version', choices=('v0','v112','v121','v143','botw160','botw190'), default='v0')
 parser.add_argument('--aoc', action='store_true', help='Breath of the Wild: the add-on content volumes extracted/<version>/aoc/<index> -> aoc-config.txt')
+parser.add_argument('--romfs-dir', type=Path, help='verified RomFS directory (default: extracted/<version>/romfs)')
+parser.add_argument('--output-dir', type=Path, help='runtime game-data directory (default: build/game-data/<version>)')
 args=parser.parse_args();version=args.version
-out=root/f'build/game-data/{version}';out.mkdir(parents=True,exist_ok=True)
+if args.aoc and args.romfs_dir: parser.error('--romfs-dir is for the base RomFS, not --aoc')
+out=args.output_dir or root/f'build/game-data/{version}';out.mkdir(parents=True,exist_ok=True)
 if args.aoc:
     # One volume per add-on content index (games/botw/scripts/extract_aoc_romfs.py); a missing index has size 0 and is not listed.
     lines=[];present=[]
@@ -25,7 +28,7 @@ if args.aoc:
             lines.append(f'AOC{index}_IMAGE_SIZE {size}\nAOC{index}_IMAGE_SHA256 {sha}\nAOC{index}_INDEX_SHA256 {isha}\n')
     (out/'aoc-config.txt').write_text(f'AOC_PRESENT_MASK {sum(1<<(i-1) for i in present)}\n'+''.join(lines))
     print(json.dumps({'aoc_present':present}));raise SystemExit
-folder=root/f'extracted/{version}/romfs';manifest=json.loads((folder/'index.json').read_text())
+folder=args.romfs_dir or root/f'extracted/{version}/romfs';manifest=json.loads((folder/'index.json').read_text())
 assert manifest['status']=='pass' and (folder/'romfs.bin').stat().st_size==manifest['romfs_size']
 strings=bytearray();rows=bytearray()
 for item in manifest['files']:

@@ -109,7 +109,7 @@ def script_of(archive, sdk, scripts, env):
     return json.loads(kept.read_text())
 
 
-_clonefile = getattr(ctypes.CDLL(None, use_errno=True), 'clonefile', None)
+_clonefile = getattr(ctypes.CDLL(None, use_errno=True), 'clonefile', None) if sys.platform == 'darwin' else None
 
 
 def place(src, dst):

@@ -2,6 +2,7 @@
 new runtime into an app without its game files. Synthetic files only; no game files or keys."""
 import hashlib
 import json
+import os
 import shutil
 import struct
 import subprocess
@@ -30,12 +31,13 @@ def tables(version, digests):
 class GameDataReader(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        compiler = shutil.which('cc') or shutil.which('clang')
+        compiler = os.environ.get('MNG_TEST_CC') or shutil.which('cc') or shutil.which('clang')
         if not compiler:
             raise unittest.SkipTest('a C compiler is required for the game data reader')
         cls.dir = Path(tempfile.mkdtemp())
-        cls.probe = cls.dir / 'game-data-probe'
-        build = subprocess.run([compiler, '-std=c11', '-Wall', '-Wextra', '-Werror', '-DTOTK_GAME_V143=1',
+        cls.probe = cls.dir / ('game-data-probe.exe' if os.name == 'nt' else 'game-data-probe')
+        windows = ['-Dsigjmp_buf=jmp_buf', '-pthread', '-static'] if os.name == 'nt' else []
+        build = subprocess.run([compiler, '-std=c11', '-Wall', '-Wextra', '-Werror', '-DTOTK_GAME_V143=1', *windows,
                                 f'-I{ROOT / "games/totk/runtime"}', str(ROOT / 'tests/game_data_probe.c'),
                                 str(ROOT / 'games/totk/runtime/game_data.c'), '-o', str(cls.probe)], capture_output=True, text=True)
         if build.returncode:
@@ -50,7 +52,7 @@ class GameDataReader(unittest.TestCase):
         shutil.rmtree(data, ignore_errors=True)
         data.mkdir()
         if text is not None:
-            (data / 'romfs-config.txt').write_text(text)
+            (data / 'romfs-config.txt').write_bytes(text.encode('utf-8'))
         return subprocess.run([str(self.probe), 'romfs-config.txt', key, kind], capture_output=True, text=True,
                               env={'TOTK_GAME_DATA': str(folder or data)})
 
@@ -60,6 +62,13 @@ class GameDataReader(unittest.TestCase):
         self.assertEqual(self.read(text, 'ROMFS_IMAGE_SHA256', 'sha256').stdout, SHA + '\n')
         self.assertEqual(self.read(text, 'NAME').stdout, 'a b\n')
         self.assertEqual(self.read('ROMFS_IMAGE_SIZE 0x10', 'ROMFS_IMAGE_SIZE', 'number').stdout, '16\n')   # no last newline
+
+    def test_windows_line_endings(self):
+        text = f'# generated on Windows\r\nROMFS_IMAGE_SIZE 17052625232\r\nROMFS_IMAGE_SHA256 {SHA}\r\nNAME 0-standard.bfttf\r\n\r\n'
+        self.assertEqual(self.read(text, 'ROMFS_IMAGE_SIZE', 'number').stdout, '17052625232\n')
+        self.assertEqual(self.read(text, 'ROMFS_IMAGE_SHA256', 'sha256').stdout, SHA + '\n')
+        self.assertEqual(self.read(text, 'NAME').stdout, '0-standard.bfttf\n')
+        self.assertEqual(self.read('ROMFS_IMAGE_SIZE 12\r3\r\n', 'ROMFS_IMAGE_SIZE', 'number').returncode, 3)
 
     def test_refused(self):
         for text, key, kind, why in (

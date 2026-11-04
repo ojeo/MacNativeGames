@@ -6,7 +6,7 @@
 // scripts/diag/retranslate_cache.py --service build/shader-service/totk_xlate --compare <cache> (every MSL byte for byte,
 // every reflection file as JSON).
 // Request: {"variant", "stage": "vs|ps|cs", "code": path, "c1": hex, "tex": {slot: type}, "img": {slot: {type, fmt}},
-//           "attr": {loc: float|sint|uint}, "fout": {idx: float|sint|uint}, "local": [x, y, z], "depth_minus_w": bool}
+//           "attr": {loc: float|sint|uint}, "fout": {idx: float|sint|uint}, "local": [x, y, z], "shared": bytes, "depth_minus_w": bool}
 // Reply:   {"ok": true} or {"ok": false, "error": "..."}; outputs <out>/<variant>_b.metal and <variant>_b.json.
 using System;
 using System.Collections.Generic;
@@ -407,6 +407,7 @@ static class ShaderService
             ["tex"] = GetObj(rq, "tex").DeepClone(), ["img"] = GetObj(rq, "img").DeepClone(), ["attr"] = GetObj(rq, "attr").DeepClone(), ["fout"] = GetObj(rq, "fout").DeepClone(),
         };
         if (Truthy(Get(rq, "local"))) job["local"] = rq["local"].DeepClone();
+        if (Get(rq, "shared") is JsonNode shared) job["shared"] = shared.DeepClone();
         job["depth_minus_w"] = Truthy(Get(rq, "depth_minus_w"));   // nvnDeviceSetDepthMode(NEAR_IS_MINUS_W): clip z converted to Metal's 0..w
         job["early_fragment_tests"] = Truthy(Get(rq, "early_fragment_tests"));   // fragment shaders: NVN control +0x718 (Program.cs QueryGraphicsState)
         Translate(job);

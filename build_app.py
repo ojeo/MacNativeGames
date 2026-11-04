@@ -1002,10 +1002,20 @@ def build_spirv_cross(tree, logs):
 def check_translator(tree):
     """The shader translation service: a native program in this repository (no .NET needed to build or to play)."""
     translator = tree / 'prebuilt/macos-arm64/totk_xlate'
-    want = (translator.parent / 'totk_xlate.sha256').read_text().strip()
+    try:
+        want = (translator.parent / 'totk_xlate.sha256').read_text().strip()
+    except OSError:
+        raise BuildError(f'{translator}: missing translator checksum; rebuild it with games/totk/tools/totk_xlate/publish_native.sh') from None
     if not translator.is_file() or sha256(translator) != want:
         raise BuildError(f'{translator}: not the shader translator this repository ships (its SHA-256 differs from '
                          f'totk_xlate.sha256); check it out again, or rebuild it with games/totk/tools/totk_xlate/publish_native.sh')
+    try:
+        stamp = (translator.parent / 'totk_xlate.chain').read_text().strip()
+    except OSError:
+        stamp = ''
+    if stamp != f'{SHADER_CHAIN} {want}':
+        raise BuildError(f'{translator}: the prebuilt translator is not stamped for {SHADER_CHAIN}; '
+                         'rebuild it with games/totk/tools/totk_xlate/publish_native.sh')
     return translator
 
 
@@ -1067,13 +1077,14 @@ def metal_compiler():
 
 # The options of totk_precise_opts() in nvn_mtl.m: the translated shaders need exactly rounded float arithmetic.
 METAL_FLAGS = ['-fmetal-math-mode=safe']
+SHADER_CHAIN = 'totk-native-v9-unverified'
 
 
 def variant_folder(game):
     """Where the game keeps the source of each patched shader variant it compiled while it was played (nvn_mtl.m
     variant_library: sampler border colours, missing varyings, the layer index, no depth output, MetalFX roles), named by
     its SHA-256: the player's shader cache, ~/Library/Application Support/MacNativeGames/<game>/shader-cache/rt-<chain>."""
-    return Path.home()/'Library/Application Support/MacNativeGames'/APPS[game][2]/'shader-cache/rt-totk-native-v8-unverified/variants'
+    return Path.home()/'Library/Application Support/MacNativeGames'/APPS[game][2]/f'shader-cache/rt-{SHADER_CHAIN}/variants'
 
 
 def variant_sources(game):
@@ -1176,6 +1187,7 @@ def clonefile(src, dst):
     """macOS clonefile(2): an APFS clone of a file or a whole folder (no extra space) in one call, without starting a
     program for it (an app holds about 50,000 shader files per version: one cp each took minutes, 2026-10-19). False
     when it cannot: another volume or file system, or dst exists."""
+    if sys.platform != 'darwin': return False
     global _libc
     if _libc is None:
         import ctypes
@@ -1491,7 +1503,7 @@ def place_seed(tree, res, version, *, game='totk'):
     try:
         report = json.loads((seed/'seed-manifest.json').read_text())
         known = seed_digests(seed)
-        if (report['version'] != version or report['chain'] != 'totk-native-v8-unverified' or
+        if (report['version'] != version or report['chain'] != SHADER_CHAIN or
                 report['shaders'] < (8000 if game == 'totk' else 2000) or not report['files'] or any(
                     Path(name).name != name or seed_sha256(seed, name, known) != digest for name, digest in report['files'].items())):
             raise ValueError('version, translation chain or file hash differs')
@@ -2051,11 +2063,7 @@ def step_shaders_botw(tree, botw, logs, *, version='botw160'):
     if not (tree / 'build/spirv-cross/spirv-cross').exists():
         say('3/4 shaders: building SPIRV-Cross with clang')
         build_spirv_cross(tree, logs)
-    translator = tree / 'prebuilt/macos-arm64/totk_xlate'
-    want = (translator.parent / 'totk_xlate.sha256').read_text().strip()
-    if not translator.is_file() or sha256(translator) != want:
-        raise BuildError(f'{translator}: not the shader translator this repository ships (its SHA-256 differs from '
-                         f'totk_xlate.sha256); check it out again, or rebuild it with games/totk/tools/totk_xlate/publish_native.sh')
+    translator = check_translator(tree)
     seed = tree / f'build/shader-seed/{version}'
     say('3/4 shaders: preparing the startup shaders from the game data and the shared shader list (a few minutes)')
     run([tree / '.venv/bin/python', botw / 'scripts/prepare_shader_seed.py', '--romfs', tree / f'extracted/{version}/romfs',

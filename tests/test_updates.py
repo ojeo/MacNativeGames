@@ -278,7 +278,7 @@ class Updates(unittest.TestCase):
                     p=tree/rel;p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(b'test')
                 import hashlib
                 (tree/f'build/shader-seed/{version}/seed-manifest.json').write_text(json.dumps(dict(
-                    version=version, chain='totk-native-v8-unverified', shaders=8000,
+                    version=version, chain=build_app.SHADER_CHAIN, shaders=8000,
                     files={'pso_manifest.tsv':hashlib.sha256(b'test').hexdigest()})))
                 with patch.object(build_app, 'app_seal_valid', return_value=True), patch.object(build_app, 'sign_app') as signing, \
                      patch.object(build_app, 'resolve_lists', side_effect=fake_lists):
@@ -308,7 +308,7 @@ class Updates(unittest.TestCase):
         game_data(tree,'v143')
         (tree/'build/shader-seed/v143/pso_manifest.tsv').write_bytes(b'test')
         (tree/'build/shader-seed/v143/seed-manifest.json').write_text(json.dumps(dict(
-            version='v143',chain='totk-native-v8-unverified',shaders=8000,
+            version='v143',chain=build_app.SHADER_CHAIN,shaders=8000,
             files={'pso_manifest.tsv':hashlib.sha256(b'test').hexdigest()})))
         def fake_clone(_source, target):
             target.parent.mkdir(parents=True,exist_ok=True)
@@ -323,7 +323,7 @@ class Updates(unittest.TestCase):
         tree=self.root/'tree';out=self.root/'existing.app';out.mkdir()
         (out/'keep.txt').write_text('previous working app')
         seed=tree/'build/shader-seed/v143';seed.mkdir(parents=True)
-        (seed/'seed-manifest.json').write_text(json.dumps(dict(version='v112',chain='totk-native-v8-unverified',shaders=1,files={'x':'0'*64})))
+        (seed/'seed-manifest.json').write_text(json.dumps(dict(version='v112',chain=build_app.SHADER_CHAIN,shaders=1,files={'x':'0'*64})))
         def fake_clone(_source, target):
             target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(b'synthetic payload')
         with patch.object(build_app,'clone',side_effect=fake_clone),patch.object(build_app,'app_seal_valid',return_value=True),patch.object(build_app,'sign_app') as signing:
@@ -340,7 +340,7 @@ class Updates(unittest.TestCase):
         seed=tree/'build/shader-seed/v143';seed.mkdir(parents=True)
         (seed/'pso_manifest.tsv').write_bytes(b'test')
         game_data(tree,'v143')
-        (seed/'seed-manifest.json').write_text(json.dumps(dict(version='v143',chain='totk-native-v8-unverified',shaders=8000,
+        (seed/'seed-manifest.json').write_text(json.dumps(dict(version='v143',chain=build_app.SHADER_CHAIN,shaders=8000,
             files={'pso_manifest.tsv':hashlib.sha256(b'test').hexdigest()})))
         def fake_clone(_source, target):
             target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(b'new app')
@@ -357,6 +357,21 @@ class Updates(unittest.TestCase):
             build_app.step_app(tree,out,self.root/'logs',version='v143')
         self.assertEqual(len(checks),2);pause.assert_called_once_with(2)
         self.assertEqual(old.read_bytes(),b'new app')
+
+    def test_prebuilt_translator_must_match_the_current_chain(self):
+        tree = self.root/'tree'
+        folder = tree/'prebuilt/macos-arm64'
+        folder.mkdir(parents=True)
+        binary = folder/'totk_xlate'; binary.write_bytes(b'prebuilt translator')
+        digest = build_app.sha256(binary)
+        (folder/'totk_xlate.sha256').write_text(digest+'\n')
+        with self.assertRaisesRegex(build_app.BuildError, 'not stamped'):
+            build_app.check_translator(tree)
+        (folder/'totk_xlate.chain').write_text(f'{build_app.SHADER_CHAIN} {digest}\n')
+        self.assertEqual(build_app.check_translator(tree), binary)
+        binary.write_bytes(b'different translator')
+        with self.assertRaisesRegex(build_app.BuildError, 'SHA-256 differs'):
+            build_app.check_translator(tree)
 
     def test_remove_tree_retries_when_a_file_reappears(self):
         path = self.root/'bundle.app'

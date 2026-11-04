@@ -135,7 +135,8 @@ class ShaderInventory(unittest.TestCase):
         b = bytearray(0x2400)
         b[:4] = b'BAHS'; struct.pack_into('<8I', b, 0, 0x53484142, 9, len(b), 5, 0, 0x100, 0x400, 0x2000)
         def control(stage, length):
-            c = bytearray(0x880); struct.pack_into('<II', c, 0x700, 0x40, length); struct.pack_into('<I', c, 0x714, stage)
+            c = bytearray(0x880); c[:4] = bytes.fromhex('34127698')
+            struct.pack_into('<II', c, 0x700, 0x40, length); struct.pack_into('<I', c, 0x714, stage)
             return bytes(c)
         struct.pack_into('<QIi', b, 0x100, 0x000, 0x880, 0x60); b[0x160:0x160+0x880] = control(0, 0x100)
         struct.pack_into('<QIi', b, 0x1000, 0x100, 0x88c, 0x60); b[0x1060:0x1060+0x880] = control(1, 0x200)  # 0x88c: hashed as 0x880
@@ -147,6 +148,24 @@ class ShaderInventory(unittest.TestCase):
                 hashlib.sha256(control(1, 0x200)+bytes([2])*0x100+bytes(0x100)).hexdigest(): ('ps', 0x200),
                 hashlib.sha256(control(0, 0x100)+bytes([3])*0x100).hexdigest(): ('vs', 0x100)}
         self.assertEqual(got, want)
+        # A different record can have plausible length, stage and offsets without being an NVN control section.
+        # It must not turn into a shader merely because those unrelated fields happen to look valid.
+        b[0x160:0x164] = b'fake'
+        remaining = list(seed.sharcb_shaders(bytes(b)))
+        self.assertEqual([(stage, len(code)) for _, stage, _, code in remaining], [('ps', 0x200)])
+
+    def test_compute_shared_memory_is_in_request_and_translation_identity(self):
+        control = bytearray(0x880)
+        struct.pack_into('<II', control, 0x700, 0x30, 0x100)
+        struct.pack_into('<IIII', control, 0x748, 16, 16, 1, 800)
+        code = bytes(0x100)
+        with tempfile.TemporaryDirectory() as tmp:
+            request = seed.translation_request('v', 'cs', control, code, {}, Path(tmp)/'v.code')
+        self.assertEqual(request['local'], [16, 16, 1])
+        self.assertEqual(request['shared'], 800)
+        before = seed.translation_input('cs', control, code)
+        struct.pack_into('<I', control, 0x754, 1024)
+        self.assertNotEqual(before, seed.translation_input('cs', control, code))
 
     def test_listed_bind_states_become_jobs_for_shaders_in_this_game(self):
         found = {'a'*64: ('vs', b'', b'', 'Shader/x'), 'b'*64: ('ps', b'', b'', 'Effect/y')}

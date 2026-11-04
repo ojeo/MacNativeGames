@@ -14,7 +14,7 @@
 #include <stdatomic.h>
 #include <math.h>
 #include <TargetConditionals.h>
-#if !TARGET_OS_IPHONE
+#if !TARGET_OS_IPHONE && !defined(TOTK_OFFLINE_EXPORT)
 #include <mach/mach.h>
 #include <mach/mach_vm.h>   /* the VR camera search (Mac diagnostic) */
 #include <pthread.h>
@@ -570,7 +570,7 @@ double runtime_lod_scale(void){return lod_k;}
 int runtime_far_scale_locked(void){const char *e=getenv("TOTK_FAR_SCALE");return e&&*e;}
 int runtime_lod_scale_locked(void){const char *e=getenv("TOTK_LOD_SCALE");return e&&*e;}
 #endif
-#if !TARGET_OS_IPHONE
+#if !TARGET_OS_IPHONE && !defined(TOTK_OFFLINE_EXPORT)
 /* High-frame-rate diagnostics (Mac, TOTK_INPUT_FILE commands). Such bugs sit in game code that compares the game's time
    values with constants tuned for 30 Hz (#61: X+0x28 > 100 above). The time values: the FrameRateMgr singleton
    (main+0x3ada848; +0x10 30 Hz ratio, +0x18 seconds, +0x1c integer FPS) and the time object X = [[main+0x3ad27c8]+0xc8]
@@ -993,7 +993,7 @@ void runtime_diag_xpoke(unsigned off,float value){
      main camera and goes on to the callee. */
 /* Defined by the VR compositor (totk_vr.m); weak here so tests that build this file alone still link. */
 __attribute__((weak)) vr_cam_state *g_vr_headlook;
-#if !TARGET_OS_IPHONE
+#if !TARGET_OS_IPHONE && !defined(TOTK_OFFLINE_EXPORT)
 vr_cam_state g_vr_cam __attribute__((aligned(16)));
 _Static_assert(offsetof(vr_cam_state,cam)==8&&offsetof(vr_cam_state,h)==16&&offsetof(vr_cam_state,used)==64&&offsetof(vr_cam_state,fp_lag)==68&&offsetof(vr_cam_state,ret)==72&&offsetof(vr_cam_state,ring)==80&&sizeof g_vr_cam.ring[0]==64&&offsetof(vr_cam_state,fp_pos)==1104&&offsetof(vr_cam_state,fp_blend)==1112&&offsetof(vr_cam_state,fp_up)==1120&&offsetof(vr_cam_state,fp_fwd)==1136&&offsetof(vr_cam_state,cam_back)==1140&&offsetof(vr_cam_state,level)==1144&&offsetof(vr_cam_state,calls)==1148&&offsetof(vr_cam_state,off)==1152&&offsetof(vr_cam_state,game_right)==1168&&offsetof(vr_cam_state,callee)==1184&&offsetof(vr_cam_state,main_vs)==1192&&offsetof(vr_cam_state,v0n)==1200&&offsetof(vr_cam_state,v0ring)==1216&&sizeof g_vr_cam.v0ring[0]==64,"vr_cam_hook offsets");
 __asm__(".text\n.p2align 4\n.globl _vr_cam_hook\n_vr_cam_hook:\n"
@@ -1158,11 +1158,11 @@ void runtime_game_patches(Module *m) {
     patch_fixed_res(m);
     patch_slowmo_bounce(m);
     patch_fade_increment(m);
-#if !TARGET_OS_IPHONE
+#if !TARGET_OS_IPHONE && !defined(TOTK_OFFLINE_EXPORT)
     diag_main=m;   /* frmwatch / xpoke */
     { extern void (*g_vr_find_camera)(const float *); g_vr_find_camera=runtime_vr_find_camera; }   /* VR camera search */
 #endif
-#if !TARGET_OS_IPHONE
+#if !TARGET_OS_IPHONE && !defined(TOTK_OFFLINE_EXPORT)
     /* VR head look widens the game's field of view to the headset's through the Vert+ stubs (runtime_aspect_vr) */
     { const char *ctl=getenv("TOTK_VR_CONTROL"),*hl=getenv("TOTK_VR_HEADLOOK"); if(ctl&&*ctl&&!(hl&&!strcmp(hl,"0")))setenv("TOTK_ASPECT_VERT","1",0); }
 #endif
@@ -1170,7 +1170,7 @@ void runtime_game_patches(Module *m) {
       aspect_install(m, "1.4.3", sites, 4, 2, ((m->text_end + 15) & ~15ULL) + 48,   /* after the two veneers above */
                      ((m->text_end + 15) & ~15ULL) + 320,   /* Vert+ stubs (2 x 304 bytes): after the bounce veneer at +256, before the rewriter's code at +1024 */
                      (m->file_size + 0x3fff) & ~0x3fffULL); }
-#if !TARGET_OS_IPHONE
+#if !TARGET_OS_IPHONE && !defined(TOTK_OFFLINE_EXPORT)
     vr_headlook_install(m);
 #endif
     patch_bench_cam(m);

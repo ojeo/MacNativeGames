@@ -28,6 +28,8 @@ static Config *config_load(const char *file) {
     c->keys = calloc(lines, sizeof *c->keys); c->values = calloc(lines, sizeof *c->values); need(c->keys && c->values, "game data memory");
     for (char *line = text, *next; *line; line = next) {
         char *end = strchr(line, '\n'); next = end ? end + 1 : line + strlen(line); if (end) *end = 0;
+        /* The same build metadata can come from Windows: remove the CR of a CRLF line ending. */
+        if (end && end > line && end[-1] == '\r') end[-1] = 0;
         if (!*line || *line == '#') continue;
         char *space = strchr(line, ' '); need(space && space > line && space[1], "game data line is not KEY VALUE");
         *space = 0; c->keys[c->count] = line; c->values[c->count++] = space + 1;

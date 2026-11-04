@@ -5,7 +5,9 @@ import argparse,json
 from pathlib import Path
 root=Path(__file__).resolve().parents[1]
 parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--version', choices=('v0','v112','v121','v143','botw160','botw190'), default='v0')
-version=parser.parse_args().version
+parser.add_argument('--tree',type=Path,help='work tree with the extracted fonts (default: the game folder)')
+args=parser.parse_args();version=args.version
+if args.tree: root=args.tree.resolve()
 folder=root/'extracted/firmware/shared-fonts';manifest=json.loads((folder/'manifest.json').read_text())
 assert manifest['status']=='pass' and [f['type'] for f in manifest['fonts']]==list(range(6))
 lines=[]

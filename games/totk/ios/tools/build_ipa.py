@@ -79,7 +79,9 @@ def discard(path,beside=None):
     folder is copied or zipped next (a folder inside the app, the app inside Payload)."""
     if not path.exists(): return
     old=(beside or path.parent)/f'.{path.name}.old-{os.getpid()}-{time.time_ns()}'
-    os.rename(path,old); subprocess.Popen(['/bin/rm','-rf',str(old)],start_new_session=True)
+    os.rename(path,old)
+    if sys.platform == 'darwin': subprocess.Popen(['/bin/rm','-rf',str(old)],start_new_session=True)
+    else: shutil.rmtree(old)
 
 def copy_tree(src,dst):
     src=Path(src);dst=Path(dst)

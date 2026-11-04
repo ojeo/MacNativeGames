@@ -85,9 +85,7 @@ static void apply_display_settings(void);   // below, next to the pane helpers i
 @interface TOTKMetalView : UIView @end
 @implementation TOTKMetalView
 + (Class)layerClass { return CAMetalLayer.class; }
-#if TARGET_OS_VISION
 - (void)layoutSubviews { [super layoutSubviews]; runtime_ios_sync_drawable(self); }
-#endif
 - (void)safeAreaInsetsDidChange { [super safeAreaInsetsDidChange]; runtime_ios_sync_safe_area(self); }   // the HUD boxes keep out of the notch
 @end
 
@@ -456,8 +454,8 @@ static void apply_settings(void) {
         g_no_game_data = copying || image
             ? [NSString stringWithFormat:(zh ? @"游戏数据还在复制到“文件 › 我的 iPhone › %@ › GameData”，复制完再打开游戏。"
                                              : @"The game data is still being copied to Files › On My iPhone › %@ › GameData. Open the game again when it is done."), app]
-            : [NSString stringWithFormat:(zh ? @"没有游戏数据。请在 Mac 上用 ios/tools/install_device.py --game-data 把它复制到“文件 › 我的 iPhone › %@ › GameData”。"
-                                             : @"No game data. On the Mac, copy it to Files › On My iPhone › %@ › GameData with ios/tools/install_device.py --game-data."), app];
+            : [NSString stringWithFormat:(zh ? @"没有游戏数据。请将其复制到“文件 › 我的 iPhone › %@ › GameData”。"
+                                             : @"No game data. Copy it to Files › On My iPhone › %@ › GameData."), app];
         fprintf(stderr, "[totk] no game image: %s\n", g_no_game_data.UTF8String);
     }
     /* The startup shaders likewise (build_app.py --ios-game-data documents): install_device.py puts the seed into its own
@@ -466,7 +464,10 @@ static void apply_settings(void) {
        earlier seeds are removed in the background. Without either seed the game has no shaders: said on the screen. */
     NSString *seedDir = [res stringByAppendingPathComponent:@"shader-seed"];
     NSArray<NSString *> *seedMark = [[NSString stringWithContentsOfFile:[gameData stringByAppendingPathComponent:@"shader-seed.txt"] encoding:NSUTF8StringEncoding error:nil] componentsSeparatedByString:@"\n"];
-    NSString *pushedName = seedMark.count >= 2 && seedMark[1].length == 64 && [seedMark[0] hasPrefix:@"shader-seed-"] && ![seedMark[0] containsString:@"/"] ? seedMark[0] : nil;
+    // Older Windows builds wrote CRLF; accept both line endings when reading their marker files.
+    NSString *seedName = seedMark.count >= 2 ? [seedMark[0] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] : nil;
+    NSString *seedFingerprint = seedMark.count >= 2 ? [seedMark[1] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] : nil;
+    NSString *pushedName = seedFingerprint.length == 64 && [seedName hasPrefix:@"shader-seed-"] && ![seedName containsString:@"/"] ? seedName : nil;
     NSString *pushed = pushedName ? [gameData stringByAppendingPathComponent:pushedName] : nil;
     BOOL packed = pushed && ![fm fileExistsAtPath:[pushed stringByAppendingPathComponent:@"seed-manifest.json"]] &&
                   [fm fileExistsAtPath:[pushed stringByAppendingString:@".pack.000"]];
@@ -480,8 +481,9 @@ static void apply_settings(void) {
         });
     } else if (!g_no_game_data && ![fm fileExistsAtPath:[seedDir stringByAppendingPathComponent:@"seed-manifest.json"]]) {
         BOOL zh = [NSLocale.preferredLanguages.firstObject hasPrefix:@"zh"];
-        g_no_game_data = zh ? @"没有着色器。请在 Mac 上用 ios/tools/install_device.py 重新安装（会把着色器复制到手机上）。"
-                            : @"No shaders. Install the game again from the Mac with ios/tools/install_device.py (it copies them to the device).";
+        g_no_game_data = [NSString stringWithFormat:(zh ? @"没有着色器。请将着色器资源复制到“文件 › 我的 iPhone › %@ › GameData”，然后重新打开游戏。"
+                                                    : @"No shaders. Copy the shader files to Files › On My iPhone › %@ › GameData, then open the game again."),
+                          [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleDisplayName"] ?: @"TOTK"];
         fprintf(stderr, "[totk] no shader seed: %s\n", g_no_game_data.UTF8String);
     }
 #if TARGET_OS_VISION

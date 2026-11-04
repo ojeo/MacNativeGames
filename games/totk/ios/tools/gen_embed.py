@@ -48,7 +48,7 @@ for name in names:
             if len(x1_data) != hi - lo: raise ValueError(f'{name}: exported x1 must be exactly {hi - lo:#x} bytes, got {len(x1_data):#x}')
             section_image, chunk_source, lo, hi = x1_export, x1_data, 0, hi - lo
         real = max(0, min(hi, len(chunk_source))-lo)
-        if real: asm += [f'    .incbin "{section_image.resolve()}", {lo:#x}, {real:#x}']
+        if real: asm += [f'    .incbin "{section_image.resolve().as_posix()}", {lo:#x}, {real:#x}']
         if hi-lo > real: asm += [f'    .space {hi-lo-real:#x}']
         asm += ['    .p2align 14']
         chunk=chunk_source[lo:min(hi,len(chunk_source))] if lo < len(chunk_source) else b''

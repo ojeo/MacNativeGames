@@ -1,0 +1,78 @@
+--- a/src/Ryujinx.Graphics.Shader/CodeGen/Spirv/Instructions.cs
++++ b/src/Ryujinx.Graphics.Shader/CodeGen/Spirv/Instructions.cs
+@@ -1308,6 +1308,9 @@
+                 lod = Src(coordType);
+             }
+ 
++            // Runtime offsets are not SPIR-V constants. Based on nxnative b3f25a0 (MIT).
++            bool offsetsConst = true;
++
+             SpvInstruction AssembleOffsetVector(int count)
+             {
+                 if (count > 1)
+@@ -1321,11 +1324,25 @@
+ 
+                     SpvInstruction vectorType = context.TypeVector(context.TypeS32(), count);
+ 
++                    if (Array.Exists(elems, e => e.Opcode != Op.OpConstant))
++                    {
++                        offsetsConst = false;
++
++                        return context.CompositeConstruct(vectorType, elems);
++                    }
++
+                     return context.ConstantComposite(vectorType, elems);
+                 }
+                 else
+                 {
+-                    return Src(AggregateType.S32);
++                    SpvInstruction elem = Src(AggregateType.S32);
++
++                    if (elem.Opcode != Op.OpConstant)
++                    {
++                        offsetsConst = false;
++                    }
++
++                    return elem;
+                 }
+             }
+ 
+@@ -1398,10 +1415,10 @@
+ 
+             if (hasOffset)
+             {
+-                operandsMask |= ImageOperandsMask.ConstOffset;
++                operandsMask |= offsetsConst ? ImageOperandsMask.ConstOffset : ImageOperandsMask.Offset;
+                 operandsList.Add(offsets[0]);
+             }
+-            else if (hasOffsets)
++            else if (hasOffsets && offsetsConst)
+             {
+                 operandsMask |= ImageOperandsMask.ConstOffsets;
+                 SpvInstruction arrayv2 = context.TypeArray(context.TypeVector(context.TypeS32(), 2), context.Constant(context.TypeU32(), 4));
+@@ -1430,6 +1447,25 @@
+             if (intCoords)
+             {
+                 result = context.ImageFetch(resultType, image, pCoords, operandsMask, operands);
++            }
++            else if (isGather && hasOffsets && !offsetsConst)
++            {
++                // nxnative: ConstOffsets must be constant. Each texel of a four-offset gather is texel (i0, j0) of a gather at that one offset,
++                // which is component w of its result (gather order: i0j1, i1j1, i1j0, i0j0)
++                SpvInstruction[] texels = new SpvInstruction[4];
++
++                for (int index = 0; index < 4; index++)
++                {
++                    SpvInstruction[] gatherOperands = [.. operands, offsets[index]];
++                    ImageOperandsMask gatherMask = operandsMask | ImageOperandsMask.Offset;
++                    SpvInstruction texel4 = isShadow
++                        ? context.ImageDrefGather(resultType, image, pCoords, dRef, gatherMask, gatherOperands)
++                        : context.ImageGather(resultType, image, pCoords, compIdx, gatherMask, gatherOperands);
++
++                    texels[index] = context.CompositeExtract(context.TypeFP32(), texel4, 3);
++                }
++
++                result = context.CompositeConstruct(resultType, texels);
+             }
+             else if (isGather)
+             {

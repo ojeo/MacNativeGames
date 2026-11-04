@@ -99,7 +99,7 @@ int front_display_link_hz(void){return TOTK_IOS_LINK_HZ;}
 @end
 static TOTKVsync *vsyncTarget;
 
-/* visionOS windows resize after launch; keep the drawable and camera aspect in step with the view. */
+/* A window can resize after launch, including an iPhone rotating from portrait to landscape. */
 void runtime_ios_sync_drawable(UIView *host){
  if(!metalLayer||host.bounds.size.width<1||host.bounds.size.height<1)return;
 #if TARGET_OS_VISION
@@ -137,14 +137,28 @@ void runtime_ios_attach_layer(CAMetalLayer *layer,UIView *host){
  runtime_ios_sync_drawable(host);
  bootOverlay=[[UIView alloc] initWithFrame:host.bounds];bootOverlay.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
  bootOverlay.backgroundColor=[UIColor colorWithRed:0.035 green:0.075 blue:0.09 alpha:1];
- CGFloat w=host.bounds.size.width,h=host.bounds.size.height;
- bootStage=[[UILabel alloc] initWithFrame:CGRectMake(0,h/2-50,w,36)];bootStage.text=@(TOTK_UI("正在启动海拉鲁","Starting Hyrule"));bootStage.textColor=UIColor.whiteColor;
+ bootStage=[UILabel new];bootStage.text=@(TOTK_UI("正在启动海拉鲁","Starting Hyrule"));bootStage.textColor=UIColor.whiteColor;
  bootStage.font=[UIFont systemFontOfSize:24 weight:UIFontWeightSemibold];bootStage.textAlignment=NSTextAlignmentCenter;
- bootDetail=[[UILabel alloc] initWithFrame:CGRectMake(24,h/2-8,w-48,36)];bootDetail.text=@(TOTK_UI("正在准备游戏环境","Preparing the game environment"));bootDetail.textColor=[UIColor colorWithWhite:0.72 alpha:1];
+ bootStage.numberOfLines=0;
+ bootDetail=[UILabel new];bootDetail.text=@(TOTK_UI("正在准备游戏环境","Preparing the game environment"));bootDetail.textColor=[UIColor colorWithWhite:0.72 alpha:1];
  bootDetail.font=[UIFont systemFontOfSize:14];bootDetail.textAlignment=NSTextAlignmentCenter;
- bootDetail.numberOfLines=2;bootDetail.adjustsFontSizeToFitWidth=YES;bootDetail.minimumScaleFactor=0.6;   /* a message (no game data) fits in two lines */
- bootProgress=[[UIProgressView alloc] initWithFrame:CGRectMake(w/2-140,h/2+30,280,8)];bootProgress.hidden=YES;
+ bootDetail.numberOfLines=0;
+ bootProgress=[UIProgressView new];bootProgress.hidden=YES;
+ bootStage.translatesAutoresizingMaskIntoConstraints=NO;bootDetail.translatesAutoresizingMaskIntoConstraints=NO;bootProgress.translatesAutoresizingMaskIntoConstraints=NO;
  [bootOverlay addSubview:bootStage];[bootOverlay addSubview:bootDetail];[bootOverlay addSubview:bootProgress];[host addSubview:bootOverlay];
+ UILayoutGuide *safe=bootOverlay.safeAreaLayoutGuide;
+ NSLayoutConstraint *progressWidth=[bootProgress.widthAnchor constraintEqualToConstant:280];progressWidth.priority=UILayoutPriorityDefaultHigh;
+ [NSLayoutConstraint activateConstraints:@[
+  [bootStage.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor constant:24],
+  [bootStage.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor constant:-24],
+  [bootStage.centerYAnchor constraintEqualToAnchor:safe.centerYAnchor constant:-35],
+  [bootDetail.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor constant:24],
+  [bootDetail.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor constant:-24],
+  [bootDetail.topAnchor constraintEqualToAnchor:bootStage.bottomAnchor constant:6],
+  [bootProgress.centerXAnchor constraintEqualToAnchor:safe.centerXAnchor],
+  [bootProgress.topAnchor constraintEqualToAnchor:bootDetail.bottomAnchor constant:12],
+  [bootProgress.leadingAnchor constraintGreaterThanOrEqualToAnchor:safe.leadingAnchor constant:24],
+  [bootProgress.trailingAnchor constraintLessThanOrEqualToAnchor:safe.trailingAnchor constant:-24],progressWidth]];
  NSNotificationCenter *nc=NSNotificationCenter.defaultCenter;
  [nc addObserverForName:UIApplicationWillResignActiveNotification object:nil queue:nil usingBlock:^(NSNotification *n){(void)n;app_active_changed(0);}];
  [nc addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:nil usingBlock:^(NSNotification *n){(void)n;app_active_changed(1);}];

@@ -387,6 +387,7 @@ static inline NSUInteger totk_contrib_prune(NSString *path, NSString *seedDir, N
         while (f && (len = getline(&line, &cap, f)) > 0) @autoreleasepool {
             if (line[0] != 'R' && line[0] != 'B' && line[0] != 'T') continue;
             if (line[len - 1] == '\n') line[--len] = 0;
+            if (len && line[len - 1] == '\r') line[--len] = 0;
             NSString *form = totk_contrib_list_row([[NSString alloc] initWithBytes:line length:(NSUInteger)len encoding:NSUTF8StringEncoding] ?: @"");
             NSSet *those = form ? pipes[form] : nil;
             if (those) [served unionSet:those];

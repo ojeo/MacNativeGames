@@ -107,19 +107,21 @@ def main():
     parser.add_argument('--output-dir', type=Path, default=root / 'extracted/v0/romfs-patches')
     parser.add_argument('--capture-frame', type=float, default=0.0)
     parser.add_argument('--version', choices=('v0','v112','v121','v143'), default='v0')
+    parser.add_argument('--romfs-dir', type=Path, help='verified RomFS directory (default: extracted/<version>/romfs)')
     parser.add_argument('--aspect', type=str.lower, help='<width>x<height> of a canvas wider (scripts/ultrawide_layout.py) or taller (scripts/tall_layout.py, 16:10) than 16:9: also lay the UI out for it; default output romfs-patches-<width>x<height> (-center with --hud center)')
     parser.add_argument('--hud', choices=('corner', 'center'), default='corner', help='with --aspect: the HUD in the screen corners or in the middle 16:9')
     args = parser.parse_args()
     version = args.version
     if args.output_dir == root / 'extracted/v0/romfs-patches': args.output_dir = root / (f'extracted/{version}/romfs-patches' + (f'-{args.aspect}' + ('-center' if args.hud == 'center' else '') if args.aspect else ''))
     assert 0 <= args.capture_frame <= 0.5
-    manifest = json.loads((root / f'extracted/{version}/romfs/index.json').read_text())
+    romfs_dir = args.romfs_dir or root / f'extracted/{version}/romfs'
+    manifest = json.loads((romfs_dir / 'index.json').read_text())
     assert manifest['status'] == 'pass'
     files = {f['path']: f for f in manifest['files']}
     out_dir = args.output_dir
     ARCHIVE = common_archive(version)
 
-    with (root / f'extracted/{version}/romfs/romfs.bin').open('rb') as image:
+    with (romfs_dir / 'romfs.bin').open('rb') as image:
         def read(path): f = files[path]; image.seek(f['offset']); b = image.read(f['size']); assert len(b) == f['size']; return b
         dictionaries = {}
         for name, (lo, hi) in sarc_members(pack := zstd.decompress(read('Pack/ZsDic.pack.zs'))).items():
@@ -155,7 +157,7 @@ def main():
     # Preserve that updated flow; this guarded patch only covers the retained original file.
     FLOW = 'Event/EventFlow/DmF_SY_GameOver.bfevfl.zs'
     FLOW_SHA256 = 'c59975494fb30063b7a339fd66bbde8b456b11c73a5b4332bc070d63ece66b7d'
-    with (root / f'extracted/{version}/romfs/romfs.bin').open('rb') as image:
+    with (romfs_dir / 'romfs.bin').open('rb') as image:
         f = files[FLOW]; image.seek(f['offset']); raw = image.read(f['size']); assert len(raw) == f['size']
     info = zstd.get_frame_info(raw); dictionary = dictionaries[info.dictionary_id]
     flow = bytearray(zstd.decompress(raw, zstd_dict=dictionary))

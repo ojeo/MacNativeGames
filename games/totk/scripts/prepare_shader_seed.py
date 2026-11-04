@@ -30,7 +30,7 @@ import time
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from shader_list import ShaderList   # noqa: E402
 
-CHAIN = 'totk-native-v8-unverified'
+CHAIN = 'totk-native-v9-unverified'
 MIN_SHADERS = 8000
 ZSTD = b'\x28\xb5\x2f\xfd'
 YAZ0 = b'Yaz0'
@@ -190,6 +190,7 @@ def translation_request(variant, stage, control, code, answers, code_path):
                    depth_minus_w=True, **answers)
     if stage == 'cs':
         request['local'] = list(struct.unpack_from('<III', control, 0x748))
+        request['shared'] = struct.unpack_from('<I', control, 0x754)[0]
     if early_fragment_tests(stage, control):
         request['early_fragment_tests'] = True
     return request
@@ -197,12 +198,12 @@ def translation_request(variant, stage, control, code, answers, code_path):
 
 def translation_input(stage, control, code):
     """Everything a translation reads of a shader, as one digest: the stage, the code the translator is given, where its
-    constants (c1) start, a compute shader's group size and a fragment shader's early fragment tests (translation_request;
+    constants (c1) start, a compute shader's group and shared memory sizes, and a fragment shader's early fragment tests (translation_request;
     totk_shader_rt.m variant_request reads the same). Shaders that differ only in other control bytes translate to the
     same files: 3,416 of Tears of the Kingdom 1.4.3's 28,771, nearly all effects, differ only at +0x7d0..+0x7df."""
     c1, length = struct.unpack_from('<II', control, 0x700)
     return digest(stage.encode() + struct.pack('<II', c1, length) + code[min(c1, 0 if stage == 'cs' else 0x30):length] +
-                  (control[0x748:0x754] if stage == 'cs' else b'') + (b'E' if early_fragment_tests(stage, control) else b''))
+                  (control[0x748:0x758] if stage == 'cs' else b'') + (b'E' if early_fragment_tests(stage, control) else b''))
 
 
 def translations_folder(beside, identity):
@@ -494,6 +495,10 @@ def sharcb_shaders(data, game='totk'):
             if not key_len or not start <= control_at <= pool - key_len or code_off >= pool_size:
                 continue
             control = bound_control(data[control_at:control_at+key_len], game, embedded=False)
+            # BAHS has other records with plausible sizes and offsets. Only NVN control sections have this magic;
+            # without the check, the 1.4.3 scan reports false shaders and feeds truncated code to the translator.
+            if control[:4] != b'\x34\x12\x76\x98':
+                continue
             c1, length = struct.unpack_from('<II', control, 0x700)
             stage = {0: 'vs', 1: 'ps', 5: 'cs'}.get(struct.unpack_from('<I', control, 0x714)[0])
             if not stage or not 0 < length <= pool_size - code_off or c1 > length:
@@ -671,7 +676,7 @@ def builtin_variants(seed, key):
     if not default:
         return []
     try:
-        refl = json.loads((Path(seed)/f'{default["variant"]}_b.json').read_text())
+        refl = json.loads((Path(seed)/f'{default["variant"]}_b.json').read_text(encoding='utf-8'))
     except (OSError, ValueError):
         refl = {}
     found = [default]
@@ -807,7 +812,7 @@ def prepare(romfs, output, translator, spirv_cross, version, shader_list=None, m
                         code_path.unlink()
                         cache.put(variant, reply, staging)
                     if reply.get('ok'):
-                        refl = json.loads((staging/(variant+'_b.json')).read_text())
+                        refl = json.loads((staging/(variant+'_b.json')).read_text(encoding='utf-8'))
                         if refl['chain'] != CHAIN or refl['stage'] != stage:
                             raise ValueError('prepared shader identity mismatch')
                         deps = json.dumps(refl['deps'], sort_keys=True, separators=(',', ':'))
@@ -835,7 +840,8 @@ def prepare(romfs, output, translator, spirv_cross, version, shader_list=None, m
                         done[0 if reply.get('ok') else 1] += 1
                         done[2] += reused
                         if (done[0]+done[1]) % 100 == 0:
-                            print(f'prepared {done[0]}/{len(jobs)}, skipped {done[1]}, {done[2]} from the translation cache; '
+                            print(f'prepared {done[0]} variants, skipped {done[1]}, {done[2]} from the translation cache; '
+                                  f'{len(jobs)} initial requests (additional variants may be generated); '
                                   f'{time.monotonic()-started:.1f}s', flush=True)
                 if mine:   # the shader's index, once all its jobs are done
                     (staging/(key+'.variants')).write_text(json.dumps([dict(variant=v, deps=json.loads(d)) for d, v in

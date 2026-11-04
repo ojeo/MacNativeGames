@@ -45,6 +45,7 @@ static _Atomic uint64_t g_taa_last;     // game frame of the last edge smoothing
 #include "nvn_depth_clear.h"
 #include "nvn_fbread.h"
 #include "nvn_refl.h"
+#include "nvn_msl_fetch.h"
 #include "nvn_texture_plan.h"
 #include "fps_overlay.h"
 #include "nvn_cover.h"
@@ -2589,7 +2590,7 @@ static int pkg_final_cache_on(void) {
     if (v < 0) { const char *e = getenv("TOTK_PKG_FINAL_CACHE"); v = !(e && !atoi(e)); atomic_store(&g_pkg_final_cache, v); }
     return v;
 }
-@interface NvPkg : NSObject { @public id<MTLTexture> tex; uint64_t stamp, seen, hash, owned_gen; int tracked, owned, hashed, vol, lost; reup_key key; uint64_t chash, csub, used; uintptr_t lo, hi; uint8_t *edge; uint32_t eh, et; int edge_want; BOTW_PKG_FIELDS } @end   // lo / hi (TOTK): the texture's memory (pkg_orphan_report)   // tracked (TOTK): result of the last nvn_dirty_tracked   // hash：DM_NVN_DIRTYCHECK 时上传内容的全量哈希 | hash: full hash of the uploaded content under DM_NVN_DIRTYCHECK
+@interface NvPkg : NSObject { @public id<MTLTexture> tex; uint64_t stamp, seen, hash, owned_gen; int tracked, owned, hashed, vol, lost, keep_full; reup_key key; uint64_t chash, csub, used; uintptr_t lo, hi; uint8_t *edge; uint32_t eh, et; int edge_want; BOTW_PKG_FIELDS } @end   // lo / hi (TOTK): the texture's memory (pkg_orphan_report)   // tracked (TOTK): result of the last nvn_dirty_tracked   // hash：DM_NVN_DIRTYCHECK 时上传内容的全量哈希 | hash: full hash of the uploaded content under DM_NVN_DIRTYCHECK
 /* TOTK: a mirrored texture the GPU starts rendering into is told directly (g_smu held), so tex_mtl no longer asks the owned
    set again every time any other serial joins it (a locked lookup per CPU-pool texture per new render target). */
 static void pkg_owned_locked(uint64_t k) {
@@ -3098,6 +3099,7 @@ static int tex_mirrored(const tex_t *t);
 static id<MTLComputePipelineState> bctc_pso(void);
 int mtl_addr(uint64_t addr, uint64_t len, void **buf, uint64_t *off);
 static int g_mip_nodrop;   // set while re-uploading a copy at full size and in the decompressed format (the GPU renders into it)
+static int g_mip_keep;     // keep the top mip when a shader reads this texture by integer coordinates
 static int tex_tc(const tex_t *t) {
     static int on = -1; if (on < 0) { const char *e = getenv("TOTK_BC_TRANSCODE"); on = no_bc() && (!e || atoi(e)); if (on) MLOG("无 BC：素材里的 BC2/BC3/BC7 转成 ASTC 4x4、BC4/BC5 转成 EAC（TOTK_BC_TRANSCODE=0 改回解压）"); }
     uint32_t g = t->d.target; void *mb; uint64_t mo;
@@ -3851,8 +3853,8 @@ static id<MTLTexture> reup_take(const reup_key *k) {
     if (hit) g_reup_reused++;
     return hit;
 }
-/* TOTK (iPhone): Metal copies of large mipmapped CPU-pool textures leave out the top level: a quarter of the memory. The
-   game samples them with normalised coordinates, so a texture one level smaller is drawn from what was its level 1 (on
+/* TOTK (iPhone): Metal copies of large mipmapped CPU-pool textures leave out the top level: a quarter of the memory. Most
+   are sampled with normalised coordinates, so a texture one level smaller is drawn from what was its level 1 (on
    the 720p handheld screen most of them are minified anyway). Texture-ID views shift their level range (tex_by_id);
    a copy the GPU starts rendering into is uploaded again at full size (tex_mtl). 2D / 2D-array / cube textures with
    at least two levels and both sides >= TOTK_MIP_DROP_MIN (512). Not lower: at 256 the grass disappeared and the ground
@@ -3864,7 +3866,7 @@ static unsigned mip_drop_of(const tex_t *t) {
     static int on = -1; static unsigned minside;
     if (on < 0) { const char *e = getenv("TOTK_MIP_DROP"), *m = getenv("TOTK_MIP_DROP_MIN"); on = e ? atoi(e) != 0 : TARGET_OS_IPHONE; minside = m ? (unsigned)atoi(m) : 512;
         if (on) MLOG("大贴图副本少传最高一级 mip：开（两边都 ≥%u 的 2D / 数组 / 立方体贴图；TOTK_MIP_DROP=0 关）", minside); }
-    if (!on || g_mip_nodrop) return 0;
+    if (!on || g_mip_nodrop || g_mip_keep) return 0;
     uint32_t g = t->d.target;
     if (!(g == 1 || g == 4 || g == 7 || g == 8 || g == 9) || t->d.levels < 2 || t->d.width < minside || t->d.height < minside) return 0;
     return 1;
@@ -4089,7 +4091,8 @@ static void *tex_mtl_p(const tex_t *ct) {
         if (pk && pk->owned && pk->tex && !reduced) return (__bridge void *)pk->tex; BOTW_PKG_RENDER_ALIAS(pk, t)
         if (pk) {   // 已上传：自上次检查后有过客体写才查覆盖页 | Already uploaded: check the covered pages only if there has been a guest write since the last check
             uint64_t now = nvn_dirty_now(), h = 0; int clean;
-            if (!pk->tex || (pk->owned && reduced)) {   // TOTK: the copy was evicted, or the GPU renders into a reduced copy (needs full size); the copy was evicted under memory pressure (pkg_evict_sweep): upload it again from the pool bytes
+            const int lv_reduced = pk->tex && pk->tex.mipmapLevelCount < (t->d.levels ? t->d.levels : 1u);
+            if (!pk->tex || (pk->owned && reduced) || (pk->keep_full && lv_reduced)) {   // a copy read by integer coordinates must keep its top mip
                 clean = 0; g_pkg_restored++;
                 if (pk->hashed) { pk->csub = g_sub_serial; if (!pkg_hash_guarded(t, &h)) h = 0; }   // a fault: the upload below refuses too
             } else
@@ -4121,7 +4124,7 @@ static void *tex_mtl_p(const tex_t *ct) {
                 if (clean) return (__bridge void *)pk->tex;
             }
             TILELOG(t, "re-upload from the pool bytes");
-            uint64_t st; BOTW_PKG_WB_TAKE() reup_key nk; g_mip_nodrop = pk->owned; id<MTLTexture> nt = pkg_upload(t, &st, &nk, pk); g_mip_nodrop = 0;   // 池内容变了（流式素材写进同一存储）：换新贴图，在途绘制仍读旧的 | Pool content changed (streamed assets written into the same storage): switch to a new texture; in-flight draws still read the old one
+            uint64_t st; BOTW_PKG_WB_TAKE() reup_key nk; g_mip_nodrop = pk->owned; g_mip_keep = pk->keep_full; id<MTLTexture> nt = pkg_upload(t, &st, &nk, pk); g_mip_nodrop = 0; g_mip_keep = 0;   // Pool content changed: switch to a new texture; in-flight draws still read the old one.
             if (nt) { id<MTLTexture> old = pk->tex; pk->tex = nt; reup_retire(old, &pk->key); pk->key = nk; if (pk->hashed) pk->chash = h; ser_bump(t->serial); pk->stamp = st; pk->seen = st; BOTW_PKG_WB_SET(pk) g_pkg_reuploads++; if (dirtycheck()) pk->hash = full_hash(t->mem, t->L.size); BOTW_REUP_TRACKED(pk, t) }
             else { free(pk->edge); pk->edge = NULL; }   // TOTK (#90): the bytes kept belong to the upload that failed
             return (__bridge void *)pk->tex;
@@ -5282,9 +5285,10 @@ static void shmap_load(void) {
     /* TOTK (2026-10-17): the table's rows are never looked up (a shader's stage comes from its own control section), only
        its folder is used to find pso_manifest.tsv / c1_full.tsv next to it; without the file (the packaged app has none) run on. */
     if (!txt) { MLOG("没有着色器映射表 %s：运行时用不到它的内容（只用它所在的目录找 pso_manifest.tsv），照常运行", path.UTF8String); txt = @"# TOTK control-code-sha256-v1\n"; }
-    if (![txt hasPrefix:@"# TOTK control-code-sha256-v1\n"]) MDIE("invalid TOTK shader map schema");
+    NSArray<NSString *> *mapLines = [txt componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet];
+    if (![mapLines.firstObject isEqualToString:@"# TOTK control-code-sha256-v1"]) MDIE("invalid TOTK shader map schema");
     g_shmap = [NSMutableDictionary dictionary];g_shassets = [NSMutableDictionary dictionary];
-    for (NSString *ln in [txt componentsSeparatedByString:@"\n"]) {
+    for (NSString *ln in mapLines) {
         if (!ln.length || [ln hasPrefix:@"#"] || [ln hasPrefix:@"package"]) continue;
         NSArray *c = [ln componentsSeparatedByString:@"\t"];
         if (c.count != 3 || [c[0] length] != 64 || [c[2] length] != 64) MDIE("invalid TOTK shader map row");
@@ -5338,10 +5342,13 @@ static void shmap_load(void) {
 /* TOTK: a shader's MSL source is needed only to build derived functions (varying patches, layered vertex, depth-less and
    MetalFX UI fragment variants). The Mac keeps it; iOS keeps only the path and reads it when needed (thousands of sources
    held as strings cost on the order of 100 MB on a device that may use about 4 GB in total). */
+static NSString *msl_lf(NSString *src) {
+    return src && [src rangeOfString:@"\r\n"].location != NSNotFound ? [src stringByReplacingOccurrencesOfString:@"\r\n" withString:@"\n"] : src;
+}
 static NSString *sh_src(NvShader *s) {
     if (!s) return nil;
-    if (s->src) return s->src;
-    return s->src_path ? [NSString stringWithContentsOfFile:s->src_path encoding:NSUTF8StringEncoding error:nil] : nil;
+    NSString *src = s->src ?: (s->src_path ? [NSString stringWithContentsOfFile:s->src_path encoding:NSUTF8StringEncoding error:nil] : nil);
+    return msl_lf(src);   // derived-function rewrites match LF, including when the seed was prepared on Windows
 }
 static int sh_has_src(NvShader *s) { return s && (s->src || s->src_path); }
 #include "nvn_pso_skey.h"
@@ -5522,12 +5529,12 @@ static void pso_user_record(const char *fmt, ...) {
         if (!warm_shared() && dir) @autoreleasepool {   // drawn here, one is new to this device's list but not to the game (the box's count)
             g_pso_shipped_seen = [NSMutableSet set];
             NSString *txt = [NSString stringWithContentsOfFile:[dir stringByAppendingPathComponent:@"pso_list.tsv"] encoding:NSUTF8StringEncoding error:nil];
-            for (NSString *old in [txt componentsSeparatedByString:@"\n"]) if (old.length && ![old hasPrefix:@"#"]) [g_pso_shipped_seen addObject:seen_key_str(old)];
+            for (NSString *old in [txt componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) if (old.length && ![old hasPrefix:@"#"]) [g_pso_shipped_seen addObject:seen_key_str(old)];
         }
         NSString *user = pso_user_path(); if (user) [paths addObject:user];
         [paths addObject:pso_shared_path()];
         for (NSString *path in paths) @autoreleasepool { NSString *txt = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
-            for (NSString *old in [txt componentsSeparatedByString:@"\n"]) if (old.length && ![old hasPrefix:@"#"]) [g_pso_user_seen addObject:seen_key_str(old)]; }
+            for (NSString *old in [txt componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) if (old.length && ![old hasPrefix:@"#"]) [g_pso_user_seen addObject:seen_key_str(old)]; }
     }
     size_t ll = strlen(line);
     NSNumber *k = seen_key(line, ll && line[ll - 1] == '\n' ? ll - 1 : ll);   // 与清单文件按行（不含换行）比 | Compared with the manifest file line by line (without the newline)
@@ -5738,6 +5745,16 @@ static void refl_mark_stores(NvShader *o, NSArray *bs, NSString *src) {
         if (msl_stores_through(src, d[@"msl_name"])) b->rw = 1;
     }
 }
+/* Integer texel reads require the guest's original dimensions. A reduced copy gives different texels; keep its top mip.
+   Ported from MacNativeGames e3f7e9d4 (#337); reads are matched to the texture bindings in the shader's own reflection. */
+static void refl_mark_fetches(NvShader *o, NSArray *bs, NSString *src) {
+    if (![bs isKindOfClass:[NSArray class]] || (int)bs.count != o->rf.nb) return;
+    for (int i = 0; i < o->rf.nb; i++) {
+        nvn_rbind *b = &o->rf.b[i]; if (b->kind != NVN_RB_TEX) continue;
+        NSDictionary *d = bs[(NSUInteger)i]; NSString *name = [d isKindOfClass:[NSDictionary class]] ? d[@"msl_name"] : nil;
+        if ([name isKindOfClass:[NSString class]] && nvn_msl_reads_texels(src.UTF8String, name.UTF8String)) b->fetch = 1;
+    }
+}
 static int drv_scan(NvShader *o, NSString *src) {   // src: the full MSL (iOS does not keep it in o->src)
     const char *s = src.UTF8String; if (!s) return 0;
     int nunfill = 0;
@@ -5814,10 +5831,10 @@ static NvShader *shader_load(NSString *pc, int stage) {
     if (nvn_refl_from_json(j, &o->rf, err, sizeof err)) { MLOG("【红】着色器 %s 反射转换失败：%s", pc.UTF8String, err); return nil; }
     if (rt_range_on()) o->range_ro=rt_range_bindings_ro(j);
     o->fn = [lib newFunctionWithName:j[@"entry"]]; o->stage = stage; strlcpy(o->key, pc.UTF8String, sizeof o->key);
-    NSString *full = rt ? [NSString stringWithContentsOfFile:rt_src encoding:NSUTF8StringEncoding error:nil] : nil;
+    NSString *full = rt ? msl_lf([NSString stringWithContentsOfFile:rt_src encoding:NSUTF8StringEncoding error:nil]) : nil;
     if (stage == 1 && o->rf.has_c1 && ssao_on()) full = ssao_patch(o, full, j[@"entry"]);   // TOTK_SSAO (totk_ssao.h): the scans below then see the patched source
     o->writes_depth = full && [full rangeOfString:@"[[depth("].location != NSNotFound;
-    if (full) { o->src_path = rt_src; drv_scan(o, full); refl_mark_stores(o, j[@"bindings"], full); }   // TOTK: scan before iOS drops the source (NPC-culling fix needs it there too); rw from the MSL's stores
+    if (full) { o->src_path = rt_src; drv_scan(o, full); refl_mark_stores(o, j[@"bindings"], full); refl_mark_fetches(o, j[@"bindings"], full); }   // Scan before iOS drops the source.
     /* TOTK (2026-10-17): the MSL is read again from its file when a variant needs it (sh_src), on the Mac too -- keeping
        every source cost 255 MB of strings (7,691 of them) in a long session (analysis/long18 heap). TOTK_KEEP_MSL=1 keeps
        them in memory (the Mac's behaviour before). */
@@ -6525,6 +6542,21 @@ static inline __attribute__((always_inline)) void *tex_fast(int tid) {
 static inline __attribute__((always_inline)) uint64_t tex_fast_rid(int tid, void **out) {
     if (tex_view_valid(tid)) { if (out) *out = g_treg[tid].view; return g_treg[tid].view_rid; }
     void *t = tex_by_id_p(tid); if (out) *out = t; return t ? ((__bridge id<MTLTexture>)t).gpuResourceID._impl : 0;
+}
+/* Called under the draw's registry lock: restore a reduced texture before its integer-coordinate read. */
+static uint64_t g_mip_kept;
+static int tex_keep_full(int tid) {
+    if (tid <= 0 || tid >= g_ntreg || !g_treg[tid].ok) return 0;
+    tex_t *t = &g_treg[tid].t;
+    if (!t->serial || !tex_mirrored(t)) return 0;
+    __unsafe_unretained NvPkg *pk = (__bridge id)serial_ptr(t->serial);
+    if (!pk || pk->keep_full || !pk->tex || pk->tex.mipmapLevelCount >= (t->d.levels ? t->d.levels : 1u)) return 0;
+    pk->keep_full = 1;
+    tex_mtl_p(t);
+    if (g_mip_kept++ < 8 || g_mip_kept % 200 == 0)
+        MLOG("[mip-keep] integer texel read: restore full texture (ser=%llu %ux%u format=%#x levels=%u; total=%llu)",
+             (unsigned long long)t->serial, t->d.width, t->d.height, t->d.format, t->d.levels, (unsigned long long)g_mip_kept);
+    return 1;
 }
 static MTLSamplerAddressMode wrapm(int w) {
     switch (w) { case 0: case 7: return MTLSamplerAddressModeClampToEdge; case 1: return MTLSamplerAddressModeRepeat;
@@ -8158,7 +8190,7 @@ static void pso_contribute(const pso_skey *sk, NSString *brec, NSString *trec) {
             NSMutableSet *rows = [NSMutableSet set];
             for (NSString *name in @[@"pso_title.tsv", @"pso_manifest.tsv", @"pso_list.tsv"]) @autoreleasepool {   // pso_list: iOS's copy of the shared list's pipelines
                 NSString *text = dir ? [NSString stringWithContentsOfFile:[dir stringByAppendingPathComponent:name] encoding:NSUTF8StringEncoding error:nil] : nil;
-                for (NSString *line in [text componentsSeparatedByString:@"\n"]) {
+                for (NSString *line in [text componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
                     NSString *row = totk_contrib_list_row(line);   // as totk_contrib_prune reads the lists
                     if (row) [rows addObject:seen_key_str(row)];
                 }
@@ -8536,7 +8568,7 @@ static void warm_plan(NSArray<NSString *> *paths, NSArray<NSString *> *files, NS
     *tasks = *shaders = *pipelines = 0;
     for (NSString *path in paths) {
         NSString *txt = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
-        for (NSString *line in [txt componentsSeparatedByString:@"\n"]) {
+        for (NSString *line in [txt componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
             if (!line.length || [line hasPrefix:@"#"] || [rows containsObject:line]) continue;
             [rows addObject:line];
             NSArray<NSString *> *c = [line componentsSeparatedByString:@"\t"];
@@ -8718,7 +8750,7 @@ static void warm_worker(NSArray<NSString *> *paths, NSArray<NSString *> *files,
             if (!txt) { MLOG("【红】预热清单读取失败：%s", path.UTF8String);
                 if (path_index++ == 0) atomic_store(&g_warm_priority_done, 1); continue; }
             NSMutableArray<NSString *> *todo = [NSMutableArray array];
-            for (NSString *line in [txt componentsSeparatedByString:@"\n"]) {
+            for (NSString *line in [txt componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
                 if (![eligible containsObject:line] || [seen containsObject:line]) continue;
                 [seen addObject:line]; [todo addObject:line];
             }
@@ -8855,7 +8887,7 @@ static void warm_light(void) {
     NSString *path = pso_user_path();
     NSString *txt = path ? [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil] : nil;
     if (!txt) return;
-    NSArray<NSString *> *lines = [txt componentsSeparatedByString:@"\n"];
+    NSArray<NSString *> *lines = [txt componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet];
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0), ^{
         uint64_t t0 = bp_now(), nr = 0, nc = 0, nfail = 0, slow = 0; NSMutableSet<NSString *> *seen = [NSMutableSet set];
         NSMutableDictionary<NSString *, NvShader *> *dict = [NSMutableDictionary dictionary];
@@ -8936,7 +8968,7 @@ static void warm_fill_archive(NSArray<NSString *> *paths, dispatch_semaphore_t d
         uint64_t t0 = bp_now(); NSMutableSet<NSString *> *seen = [NSMutableSet set];
         NSMutableArray<NSString *> *todo = [NSMutableArray array];
         for (NSString *path in paths) @autoreleasepool {
-            for (NSString *line in [[NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil] componentsSeparatedByString:@"\n"]) {
+            for (NSString *line in [[NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil] componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
                 if (line.length < 2 || [line characterAtIndex:1] != '\t' || [seen containsObject:line]) continue;
                 unichar t = [line characterAtIndex:0];
                 if (t != 'R' && t != 'C' && t != 'B' && t != 'T') continue;
@@ -9813,6 +9845,7 @@ static int encode_args(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, in
                     tid < g_ntreg ? (void *)g_treg[tid].t.mem : NULL, tid < g_ntreg ? (unsigned long long)g_treg[tid].t.L.size : 0ull, tid < g_ntreg ? g_treg[tid].t.d.flags : 0u,
                     tid < g_ntreg ? g_treg[tid].t.d.levels : 0u, (__bridge void *)t, (__bridge void *)t.parentTexture);
             }
+            if (t && b->fetch && tex_keep_full(tid)) { tv = NULL; trid = tex_fast_rid(tid, &tv); t = (__bridge id<MTLTexture>)tv; }
             if (!t) { t = dummy_tex(b->dtt, b->dpf); trid = g_dummy_tex_rid[b->dtt & 7][b->dpf & 3]; }
             else if ((b->dtt == MTLTextureType2DArray && treg_view_type(tid, t) == MTLTextureType2D) || (b->dtt == MTLTextureType2D && treg_view_type(tid, t) == MTLTextureType2DArray)) {
                 /* TOTK: the shader indexes a 2D texture as a 2D array (the UI glyph atlas: NVN clamps the layer to 0) or the reverse;

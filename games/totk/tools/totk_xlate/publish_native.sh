@@ -43,4 +43,7 @@ OUT=$REPO/games/totk/prebuilt/macos-arm64
 mkdir -p "$OUT"
 cp "$WORK/out/totk_xlate" "$OUT/totk_xlate"
 shasum -a 256 "$OUT/totk_xlate" | awk '{print $1}' > "$OUT/totk_xlate.sha256"
+CHAIN=$(sed -n 's/^#define DMSH_CHAIN "\([^"]*\)"$/\1/p' "$REPO/games/totk/third_party/d2r_gfx/gfx/nvn/dmsh_chain.h")
+[[ -n $CHAIN ]] || { echo 'no shader chain in dmsh_chain.h'; exit 1; }
+printf '%s %s\n' "$CHAIN" "$(cat "$OUT/totk_xlate.sha256")" > "$OUT/totk_xlate.chain"
 echo "built $OUT/totk_xlate (sha256 $(cat "$OUT/totk_xlate.sha256"))"
