@@ -14992,7 +14992,7 @@ void mtl_exec(const uint8_t *p) {
 
 // ---------- 出图：交换链贴图画到 CAMetalLayer；可选截图 ----------
 // ---------- Present: draw the swapchain texture to the CAMetalLayer; optional screenshot ----------
-static id<MTLRenderPipelineState> g_blit_pso; static MTLPixelFormat g_blit_fmt;
+static id<MTLRenderPipelineState> g_blit_pso, g_overlay_pso; static MTLPixelFormat g_blit_fmt;
 static id<MTLSamplerState> g_blit_samp;
 static uint64_t g_present_n;
 uint64_t mtl_present_count(void) { return g_present_n; }   // 实际出图次数（发热归因 DM_HEAT 算出图帧率） | Actual present count (heat attribution DM_HEAT computes the present frame rate)
@@ -15472,6 +15472,14 @@ static void present_pipeline(MTLPixelFormat format) {
         pd.colorAttachments[0].pixelFormat = format;
         g_blit_pso = [g_dev newRenderPipelineStateWithDescriptor:pd error:&e];
         if (!g_blit_pso) MDIE("出图管线失败 %s", e.localizedDescription.UTF8String);
+        /* The game picture is opaque; the HUD textures carry premultiplied alpha and must blend over it. */
+        pd.colorAttachments[0].blendingEnabled = YES;
+        pd.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorOne;
+        pd.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+        pd.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorOne;
+        pd.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+        g_overlay_pso = [g_dev newRenderPipelineStateWithDescriptor:pd error:&e];
+        if (!g_overlay_pso) MDIE("HUD blend pipeline failed %s", e.localizedDescription.UTF8String);
         g_blit_fmt = format;
         MTLSamplerDescriptor *sd = [MTLSamplerDescriptor new]; sd.minFilter = sd.magFilter = MTLSamplerMinMagFilterLinear; sd.supportArgumentBuffers = YES;
         g_blit_samp = [g_dev newSamplerStateWithDescriptor:sd];
@@ -15725,6 +15733,7 @@ static int present_encode(id<MTLCommandBuffer> cb, id<MTLTexture> src, id<MTLTex
     [en setFragmentBytes:uv length:sizeof uv atIndex:0];
     [en drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     MTLViewport ovp; float fuv[8];
+    [en setRenderPipelineState:g_overlay_pso];
     if (fps_overlay && fps_overlay_prepare(3, vp, &ovp, fuv)) {
         [en setViewport:ovp]; [en setFragmentTexture:g_fps_tex[3] atIndex:0]; [en setFragmentBytes:fuv length:sizeof fuv atIndex:0];
         [en drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
@@ -15776,6 +15785,7 @@ static int present_encode_m4(id<MTL4CommandBuffer> cb, id<MTLTexture> src, id<MT
     [en setViewport:vp]; [en setRenderPipelineState:g_blit_pso];
     [en drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     MTLViewport ovp; float fuv[8];
+    [en setRenderPipelineState:g_overlay_pso];
     if (fps_overlay_prepare(uv_i, vp, &ovp, fuv)) {   // argument-table bindings are captured per draw, so rebinding here leaves the game picture's draw intact
         memcpy(g_fps_uv[uv_i].contents, fuv, sizeof fuv);
         [args setTexture:g_fps_tex[uv_i].gpuResourceID atIndex:0];

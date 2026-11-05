@@ -35,6 +35,10 @@ int totk_frame_env_build(const char *cap, totk_frame_env *out);
 int totk_preset_env_build(int docked, totk_preset_env *out);
 /* fps is the pane's preset row, "60" (up to the display's rate) or "30" (held). 0 for anything else. */
 int totk_preset_frame_env_build(const char *fps, totk_frame_env *out);
+/* Explicit TOTK_START_SCREEN takes precedence over the saved auto-start preference. */
+int totk_auto_start(const char *screen, int saved);
+/* Touch opacity: default 32%, clamped to 10–100% so controls remain visible. */
+float totk_touch_opacity(float value, int saved);
 
 const char *totk_picture_mode_default(void);
 const char *totk_frame_cap_default(void);

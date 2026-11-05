@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include "runtime.h"
 #include "settings_map.h"
+#include "totk_ui_lang.h"
 
 /* Layout inside the safe area (clear of the iPhone's notch, rounded corners and home indicator), like a Switch
    controller: ZL/L and R/ZR along the top with − and + between them, and two columns mirroring each other: on the left
@@ -14,9 +15,7 @@
    A touch that misses every button is a stick, centred where the finger went down: the left stick on the left half,
    the camera (right stick) on the right half. Bits are the Npad buttons. While a game controller is connected the layer
    is hidden; a touch shows it and works as usual, and it hides again 3 seconds after the last finger lifts.
-   Between − and + a smaller button shows the frame rate the game is held to; a tap switches it at once. With the
-   custom layer off it saves the choice in the pane's preset row (TOTK_PHONE_FPS) for the next start; with it on the
-   pane owns the cap, so the button only holds 30 until the next launch. */
+   Between − and + a smaller button opens the in-game settings. */
 typedef struct { CGPoint at; uint64_t bit; NSString *label; CGFloat size; } TouchButton;
 enum { kButtonCount = 16 };
 static const CGFloat kButtonSize = 46;
@@ -29,6 +28,12 @@ static const CGFloat kFpsButtonSize = 34;
     NSMapTable<UITouch *, NSValue *> *rightOrigins;   // the same for the camera stick
     BOOL gamepad, concealed;                          // a controller is connected; the layer is hidden for it
     NSTimer *hideTimer;
+    NSMutableDictionary<NSString *, NSString *> *positions;
+    NSDictionary *beforeEdit;
+    UITouch *editingTouch;
+    NSString *editingKey;
+    BOOL editingLayout;
+    UIStackView *editingActions;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
@@ -37,6 +42,7 @@ static const CGFloat kFpsButtonSize = 34;
         points = [NSMapTable strongToStrongObjectsMapTable];
         leftOrigins = [NSMapTable strongToStrongObjectsMapTable];
         rightOrigins = [NSMapTable strongToStrongObjectsMapTable];
+        positions = [[NSUserDefaults.standardUserDefaults dictionaryForKey:self.layoutKey] mutableCopy] ?: [NSMutableDictionary dictionary];
         NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
         [center addObserver:self selector:@selector(controllersChanged:) name:GCControllerDidConnectNotification object:nil];
         [center addObserver:self selector:@selector(controllersChanged:) name:GCControllerDidDisconnectNotification object:nil];
@@ -46,6 +52,30 @@ static const CGFloat kFpsButtonSize = 34;
     }
     return self;
 }
+
+- (NSString *)layoutKey { return self.traitCollection.userInterfaceIdiom == UIUserInterfaceIdiomPad ? @"TOTKTouchLayoutPad" : @"TOTKTouchLayoutPhone"; }
+- (void)showControls { concealed = NO; [self setNeedsDisplay]; }
+- (CGPoint)position:(NSString *)key fallback:(CGPoint)p {
+    NSString *v = positions[key]; if (![v isKindOfClass:NSString.class]) return p;
+    CGPoint q = CGPointFromString(v); CGRect a = self.area;
+    if (!isfinite(q.x) || !isfinite(q.y) || q.x < 0 || q.x > 1 || q.y < 0 || q.y > 1) return p;
+    return CGPointMake(a.origin.x + q.x * a.size.width, a.origin.y + q.y * a.size.height);
+}
+- (void)beginLayoutEditing {
+    [hideTimer invalidate]; hideTimer = nil; [self conceal]; concealed = NO; editingLayout = YES; beforeEdit = [positions copy];
+    editingActions = [UIStackView new]; editingActions.axis = UILayoutConstraintAxisHorizontal; editingActions.spacing = 12;
+    for (NSArray *item in @[@[totk_ui_zh() ? @"完成" : @"Done", @"finishLayout"], @[totk_ui_zh() ? @"取消" : @"Cancel", @"cancelLayout"], @[totk_ui_zh() ? @"重置" : @"Reset", @"resetLayout"]]) {
+        UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem]; [b setTitle:item[0] forState:UIControlStateNormal];
+        b.backgroundColor = [UIColor colorWithWhite:0 alpha:.75]; b.layer.cornerRadius = 8;
+        [b addTarget:self action:NSSelectorFromString(item[1]) forControlEvents:UIControlEventTouchUpInside]; [editingActions addArrangedSubview:b];
+    }
+    editingActions.frame = CGRectMake(0, 0, 340, 44); editingActions.center = CGPointMake(CGRectGetMidX(self.bounds), CGRectGetMaxY(self.area)-30);
+    editingActions.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleTopMargin;
+    [self addSubview:editingActions]; [self setNeedsDisplay];
+}
+- (void)finishLayout { [NSUserDefaults.standardUserDefaults setObject:positions forKey:self.layoutKey]; beforeEdit = nil; editingLayout = NO; editingTouch = nil; [editingActions removeFromSuperview]; editingActions = nil; [self setNeedsDisplay]; }
+- (void)cancelLayout { positions = [beforeEdit mutableCopy] ?: [NSMutableDictionary dictionary]; beforeEdit = nil; editingLayout = NO; editingTouch = nil; [editingActions removeFromSuperview]; editingActions = nil; [self setNeedsDisplay]; }
+- (void)resetLayout { [positions removeAllObjects]; [self setNeedsDisplay]; }
 
 - (void)controllersChanged:(NSNotification *)note {
     BOOL connected = NO;
@@ -69,7 +99,7 @@ static const CGFloat kFpsButtonSize = 34;
         });
     if (hidden == gamepad) return;
     gamepad = hidden; [hideTimer invalidate]; hideTimer = nil;
-    if (gamepad) [self conceal]; else { concealed = NO; [self setNeedsDisplay]; }
+    if (gamepad && !editingLayout) [self conceal]; else { concealed = NO; [self setNeedsDisplay]; }
 }
 
 - (void)conceal {
@@ -111,7 +141,7 @@ static const CGFloat kFpsButtonSize = 34;
 }
 - (CGPoint)restingStick:(BOOL)right {
     CGRect a = self.area; CGFloat inset = self.columnInset + self.stickRadius * 1.9;
-    return CGPointMake(right ? CGRectGetMaxX(a) - inset : CGRectGetMinX(a) + inset, CGRectGetMinY(a) + a.size.height * .80);
+    return [self position:right ? @"rightStick" : @"leftStick" fallback:CGPointMake(right ? CGRectGetMaxX(a) - inset : CGRectGetMinX(a) + inset, CGRectGetMinY(a) + a.size.height * .80)];
 }
 
 - (void)buttons:(TouchButton *)b {
@@ -125,22 +155,20 @@ static const CGFloat kFpsButtonSize = 34;
         {{x + w * .40, top}, 2048, @"−", kButtonSize}, {{x + w * .60, top}, 1024, @"+", kButtonSize},
         {{pad.x - d, pad.y}, 4096, @"◀", kButtonSize}, {{pad.x, pad.y - d}, 8192, @"▲", kButtonSize}, {{pad.x + d, pad.y}, 16384, @"▶", kButtonSize}, {{pad.x, pad.y + d}, 32768, @"▼", kButtonSize},
         {{x + w * .05 - shift, bottom}, 16, @"L3", kButtonSize}, {{x + w * .95 + shift, bottom}, 32, @"R3", kButtonSize}};
-    for (int i = 0; i < kButtonCount; i++) b[i] = all[i];
+    for (int i = 0; i < kButtonCount; i++) { b[i] = all[i]; b[i].at = [self position:[NSString stringWithFormat:@"button%d", i] fallback:b[i].at]; }
 }
 
 - (CGPoint)fpsButton { CGRect a = self.area; return CGPointMake(CGRectGetMidX(a), CGRectGetMinY(a) + a.size.height * .12); }
 - (BOOL)fpsButtonAt:(CGPoint)p { CGPoint f = self.fpsButton; return hypot(p.x - f.x, p.y - f.y) < kFpsButtonSize * .75; }
+#ifdef GAME_BOTW
 - (void)switchFrameRate {
-    /* The pane's two layers (settings_map.c): the preset layer saves 30 / 60 in its own row; the custom layer keeps the
-       cap in the pane, so this only holds 30 until the next launch and saves nothing. */
     BOOL custom = [NSUserDefaults.standardUserDefaults boolForKey:@"TOTK_CUSTOM_PICTURE"];
-    int fps = totk_frame_button_target(runtime_phone_fps() == 30);
-    runtime_phone_fps_set(fps);
+    int fps = totk_frame_button_target(runtime_phone_fps() == 30); runtime_phone_fps_set(fps);
     const char *key = totk_frame_button_key(custom);
     if (key) [NSUserDefaults.standardUserDefaults setObject:fps == 30 ? @"30" : @"60" forKey:@(key)];
     [self setNeedsDisplay];
 }
-
+#endif
 - (uint64_t)buttonAt:(CGPoint)p {
     TouchButton b[kButtonCount]; [self buttons:b]; CGFloat hit = self.hitRadius; uint64_t bits = 0;
     for (int i = 0; i < kButtonCount; i++) if (hypot(p.x - b[i].at.x, p.y - b[i].at.y) < MIN(hit, b[i].size * .75)) bits |= b[i].bit;
@@ -166,10 +194,24 @@ static void stick_axes(CGPoint from, CGPoint to, CGFloat radius, int32_t *x, int
 
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     (void)event; concealed = NO; [hideTimer invalidate]; hideTimer = nil;
+    if (editingLayout) {
+        if (editingTouch) return;
+        UITouch *t = touches.anyObject; CGPoint p = [t locationInView:self]; TouchButton b[kButtonCount]; [self buttons:b];
+        CGFloat best = 40; NSString *key = nil;
+        for (int i = 0; i < kButtonCount; i++) { CGFloat d = hypot(p.x-b[i].at.x, p.y-b[i].at.y); if (d < best) { best = d; key = [NSString stringWithFormat:@"button%d",i]; } }
+        for (int i = 0; i < 2; i++) { CGPoint q = [self restingStick:i != 0]; CGFloat d = hypot(p.x-q.x,p.y-q.y); if (d < best) { best = d; key = i ? @"rightStick" : @"leftStick"; } }
+        if (key) { editingTouch = t; editingKey = key; } return;
+    }
     totk_device_motion_note_touch();   // a finger on the screen takes the aiming from a controller's gyro (phone_motion.m)
     for (UITouch *t in touches) {
         CGPoint p = [t locationInView:self]; NSValue *v = [NSValue valueWithCGPoint:p]; [points setObject:v forKey:t];
-        if ([self fpsButtonAt:p]) { [self switchFrameRate]; continue; }   // pressed no Npad button and moves no stick
+        if ([self fpsButtonAt:p]) {
+#ifdef GAME_BOTW
+            [self switchFrameRate]; continue;
+#else
+            [points removeObjectForKey:t]; [self conceal]; [[NSNotificationCenter defaultCenter] postNotificationName:@"TOTKOpenGameSettings" object:self]; return;
+#endif
+        }
         if ([self buttonAt:p]) continue;
         [(p.x < CGRectGetMidX(self.bounds) ? leftOrigins : rightOrigins) setObject:v forKey:t];
     }
@@ -177,11 +219,13 @@ static void stick_axes(CGPoint from, CGPoint to, CGFloat radius, int32_t *x, int
 }
 - (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     (void)event;
+    if (editingLayout) { if (editingTouch && [touches containsObject:editingTouch]) { CGPoint p = [editingTouch locationInView:self]; CGRect a = self.area; if (a.size.width > 0 && a.size.height > 0) { CGPoint q = CGPointMake(fmax(0,fmin(1,(p.x-a.origin.x)/a.size.width)),fmax(0,fmin(1,(p.y-a.origin.y)/a.size.height))); positions[editingKey] = NSStringFromCGPoint(q); [self setNeedsDisplay]; } } return; }
     for (UITouch *t in touches) [points setObject:[NSValue valueWithCGPoint:[t locationInView:self]] forKey:t];
     [self updateState];
 }
 - (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     (void)event;
+    if (editingLayout) { if (editingTouch && [touches containsObject:editingTouch]) { editingTouch = nil; editingKey = nil; } return; }
     for (UITouch *t in touches) { [points removeObjectForKey:t]; [leftOrigins removeObjectForKey:t]; [rightOrigins removeObjectForKey:t]; }
     [self updateState]; [self hideLater];
 }
@@ -197,7 +241,10 @@ static void draw_stick(CGContextRef c, CGPoint o, CGPoint p, CGFloat r) {
 
 - (void)drawRect:(CGRect)rect {
     if (concealed) return;
-    (void)rect; CGContextRef c = UIGraphicsGetCurrentContext(); UIColor *ink = [UIColor colorWithWhite:1 alpha:.32];
+    (void)rect; CGContextRef c = UIGraphicsGetCurrentContext();
+    id savedOpacity = [NSUserDefaults.standardUserDefaults objectForKey:@"TOTK_TOUCH_OPACITY"];
+    CGFloat opacity = totk_touch_opacity([savedOpacity floatValue], savedOpacity != nil);
+    UIColor *ink = [UIColor colorWithWhite:1 alpha:opacity];
     // One fill for every button and knob, set before each fill: drawing a label leaves the context's fill colour at the
     // label's, which once made every button after A (the first drawn) brighter than A and the stick knobs.
     CGColorRef fill = ink.CGColor; CGContextSetStrokeColorWithColor(c, ink.CGColor); CGContextSetFillColorWithColor(c, fill); CGContextSetLineWidth(c, 2);
@@ -214,14 +261,22 @@ static void draw_stick(CGContextRef c, CGPoint o, CGPoint p, CGFloat r) {
         CGContextSetFillColorWithColor(c, fill); CGContextFillEllipseInRect(c, box); CGContextStrokeEllipseInRect(c, box);
         CGSize z = [b[i].label sizeWithAttributes:attrs]; [b[i].label drawAtPoint:CGPointMake(b[i].at.x - z.width / 2, b[i].at.y - z.height / 2) withAttributes:attrs];
     }
-    // The frame rate button: a smaller rounded square, its label the rate the game is held to now.
+    // Settings button between minus and plus.
     CGPoint f = self.fpsButton; CGRect box = CGRectMake(f.x - kFpsButtonSize / 2, f.y - kFpsButtonSize / 2, kFpsButtonSize, kFpsButtonSize);
+#ifdef GAME_BOTW
     UIBezierPath *key = [UIBezierPath bezierPathWithRoundedRect:box cornerRadius:8];
+#else
+    UIBezierPath *key = [UIBezierPath bezierPathWithOvalInRect:box];
+#endif
     CGContextSetFillColorWithColor(c, fill); [key fill]; [key stroke];
-    /* The runtime only knows "held at 30" or not, so the label shows that state: after a tap that lifts the pane's cap
-       it agrees with the pacing instead of repeating the stale pane value. */
+#ifdef GAME_BOTW
     NSString *rate = runtime_phone_fps() == 30 ? @"30" : @"60";
     NSDictionary *small = @{NSFontAttributeName: [UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightSemibold], NSForegroundColorAttributeName: ink};
     CGSize z = [rate sizeWithAttributes:small]; [rate drawAtPoint:CGPointMake(f.x - z.width / 2, f.y - z.height / 2) withAttributes:small];
+#else
+    /* Three small dots use the same colour and opacity as the other virtual controls. */
+    CGContextSetFillColorWithColor(c, fill);
+    for (int i = -1; i <= 1; i++) CGContextFillEllipseInRect(c, CGRectMake(f.x + i * 6 - 1.5, f.y - 1.5, 3, 3));
+#endif
 }
 @end

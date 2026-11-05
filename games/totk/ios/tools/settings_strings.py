@@ -38,7 +38,7 @@ def tables(root, fr):
 def localize(bundle):
     bundle = Path(bundle)
     root = plistlib.loads((bundle / 'Root.plist').read_bytes())
-    fr = json.loads((Path(__file__).with_name('settings_fr.json')).read_text())
+    fr = json.loads((Path(__file__).with_name('settings_fr.json')).read_text(encoding='utf-8'))
     for lang, table in tables(root, fr).items():
         d = bundle / f'{lang}.lproj'; d.mkdir(exist_ok=True)
         (d / 'Root.strings').write_bytes(plistlib.dumps(table))   # a property-list .strings, read as is by the Settings app

@@ -1,5 +1,15 @@
 #include "settings_map.h"
 #include <string.h>
+#include <math.h>
+
+int totk_auto_start(const char *screen, int saved) {
+    return screen && *screen ? !strcmp(screen, "0") : !!saved;
+}
+
+float totk_touch_opacity(float value, int saved) {
+    if (!saved || !isfinite(value)) return 0.32f;
+    return value < 0.1f ? 0.1f : value > 1.0f ? 1.0f : value;
+}
 
 /* The picture mode owns the drawable, the output upscale and the operation: the game renders into a canvas, and the
    mode either matches the drawable to it (720 or 1080 rows) or hands the canvas to MetalFX and lets it fill the panel's

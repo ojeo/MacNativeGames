@@ -81,7 +81,9 @@ def main():
         verify_env = {k: v for k, v in env.items() if k != 'TOTK_EXPORT_IOS'}
         verify_cmd = [str(verifier), str(rewritten / f'{name}.patched.bin'), str(tmp / f'{name}.x0.bin'),
                       str(tmp / f'{name}.x1.bin'), *(hex(x) for x in LAYOUT[name])]
-        subprocess.run(verify_cmd, check=True, env=verify_env)
+        checked = subprocess.run(verify_cmd, check=True, env=verify_env, capture_output=True)
+        if b'cheat probes installed: mask 0x7' not in checked.stderr:
+            raise ValueError('iOS cheat veneer verification did not accept all three probes')
         # A negative control proves the verifier is actually checking the exported code rather than just launching.
         x0 = tmp / f'{name}.x0.bin'
         with x0.open('r+b') as f:
@@ -92,6 +94,29 @@ def main():
                 raise ValueError('iOS patch verification did not reject a corrupted controller instruction')
         finally:
             with x0.open('r+b') as f: f.seek(0x2db204); f.write(original)
+        # An absent probe leaves the original instruction and does not disable the other probes.
+        x1 = tmp / 'main.x1.bin'
+        for offset, original_word, expected_mask in ((0x4407d0, 0xf9400008, b'0x6'),
+                                                       (0x782274, 0x35001738, b'0x5'),
+                                                       (0x31d398, 0x1f080800, b'0x3')):
+            with x0.open('r+b') as f:
+                f.seek(offset); original = f.read(4); f.seek(offset); f.write(original_word.to_bytes(4, 'little'))
+            try:
+                negative = subprocess.run(verify_cmd, env=verify_env, capture_output=True)
+                if negative.returncode or b'cheat probes installed: mask ' + expected_mask not in negative.stderr:
+                    raise ValueError('iOS cheat verifier did not isolate the absent probe')
+            finally:
+                with x0.open('r+b') as f: f.seek(offset); f.write(original)
+        # A live branch into damaged signed code cannot be repaired on iOS; stop before guest execution.
+        offset = ((rewritten / 'main.patched.bin').stat().st_size + 15 & ~15) + 1024 - LAYOUT['main'][3]
+        with x1.open('r+b') as f:
+            f.seek(offset); original = f.read(1); f.seek(offset); f.write(bytes([original[0] ^ 1]))
+        try:
+            negative = subprocess.run(verify_cmd, env=verify_env, capture_output=True)
+            if negative.returncode == 0 or b'embedded cheat probe mismatch' not in negative.stderr:
+                raise ValueError('iOS cheat verifier did not reject a damaged live veneer')
+        finally:
+            with x1.open('r+b') as f: f.seek(offset); f.write(original)
         for name in ('sdk', 'subsdk0'):
             image = (rewritten / f'{name}.patched.bin').read_bytes()
             text, _, _, patch = LAYOUT[name]

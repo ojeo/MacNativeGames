@@ -198,6 +198,9 @@ void runtime_mouse_move(double dx, double dy);      /* points, AppKit's deltaX /
 void runtime_mouse_button(int button, int down);    /* main thread; 0 left, 1 right, 2 middle, 3 and 4 the side buttons */
 void runtime_mouse_release(void);                   /* main thread: buttons up, stick centred */
 void runtime_touch_pad_set(const RuntimeGamepadState *state);   /* on-screen touch controls (iOS) */
+unsigned runtime_cheat_hooks_available(void); /* 1.4.3 iOS: health=1, battery=2, stamina=4 */
+int runtime_cheat_hooks_ready(void);
+void runtime_cheat_set(unsigned flags);
 int runtime_phone_fps(void);                /* d2r_gfx hle_nvn.c, iPhone / iPad: 30 while held at 30 (TOTK_PHONE_FPS), else 60 */
 void runtime_phone_fps_set(int fps);        /* 30 holds 30, anything else up to 60: the touch controls' button, at once */
 /* Controller rumble and motion (opt-in TOTK_RUMBLE=1 / TOTK_GYRO=1): the game's hid side in runtime/hid_feedback.c, the

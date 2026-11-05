@@ -15,6 +15,7 @@
 #include "settings_map.h"
 #include "totk_shader_contrib.h"   // totk_contrib_prune
 #import "touch_pad.h"
+#import "game_settings.h"
 #import "start_screen.h"
 
 int totk_host_main(int argc, char **argv);
@@ -87,6 +88,7 @@ static void apply_display_settings(void);   // below, next to the pane helpers i
 + (Class)layerClass { return CAMetalLayer.class; }
 - (void)layoutSubviews { [super layoutSubviews]; runtime_ios_sync_drawable(self); }
 - (void)safeAreaInsetsDidChange { [super safeAreaInsetsDidChange]; runtime_ios_sync_safe_area(self); }   // the HUD boxes keep out of the notch
+- (void)didMoveToWindow { [super didMoveToWindow]; fprintf(stderr, "[totk] game view %s window\n", self.window ? "attached to" : "detached from"); }
 @end
 
 @interface TOTKGameController : UIViewController @property(nonatomic,strong) TOTKMetalView *gameView; @end
@@ -105,6 +107,10 @@ static void apply_display_settings(void);   // below, next to the pane helpers i
     [self.view addSubview:self.gameView];
     runtime_ios_attach_layer((CAMetalLayer *)self.gameView.layer, self.gameView);
     TOTKTouchPad *pad=[[TOTKTouchPad alloc] initWithFrame:self.view.bounds];pad.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;[self.view addSubview:pad];
+    __weak TOTKGameController *weakSelf = self;
+    [[NSNotificationCenter defaultCenter] addObserverForName:@"TOTKOpenGameSettings" object:pad queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) {
+        TOTKGameController *controller = weakSelf; if (controller) totk_show_game_settings(controller, note.object);
+    }];
 }
 - (void)viewDidAppear:(BOOL)animated {
     [super viewDidAppear:animated];
@@ -122,13 +128,15 @@ static void apply_display_settings(void);   // below, next to the pane helpers i
     __weak TOTKGameController *weak = self;
     void (^start)(void) = ^{
         apply_display_settings();
+        totk_capture_game_settings();
+        totk_restore_cheats();
         runtime_ios_sync_drawable(weak.gameView);   // the drawable follows the chosen picture (TOTK_IOS_DRAWABLE_H)
         [weak boot];
     };
     /* A run started by a script skips the start screen, which would wait for a tap: devicectl ... --environment-variables
        '{"TOTK_START_SCREEN":"0"}'. The Settings app's choices apply as they are (after PR #1174). */
     const char *screen = getenv("TOTK_START_SCREEN");
-    if (screen && !strcmp(screen, "0")) start();
+    if (totk_auto_start(screen, [NSUserDefaults.standardUserDefaults boolForKey:@"TOTK_AUTO_START"])) start();
     else [self.view addSubview:[[TOTKStartView alloc] initWithFrame:self.view.bounds onStart:start]];
 #endif
 }
@@ -433,6 +441,7 @@ static void apply_settings(void) {
     BOOL debugLog = debugEnv ? (*debugEnv && strcmp(debugEnv,"0")) : [NSUserDefaults.standardUserDefaults boolForKey:@"TOTK_DEBUG_LOG"];
     if (debugLog) { if (freopen(log.fileSystemRepresentation,"w",stderr)) setvbuf(stderr,NULL,_IOLBF,0); setenv("TOTK_UW_CATALOG","1",0); }
     else { [fm removeItemAtPath:log error:nil]; if (freopen("/dev/null","w",stderr)) setvbuf(stderr,NULL,_IOFBF,1<<16); }
+    totk_capture_settings_environment();
     apply_settings();
     setenv("TOTK_ROMFS",[res stringByAppendingPathComponent:@"romfs"].fileSystemRepresentation,1);
     setenv("TOTK_GAME_DATA",[res stringByAppendingPathComponent:@"game-data"].fileSystemRepresentation,1);   // runtime/game_data.h

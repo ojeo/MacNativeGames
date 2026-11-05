@@ -1,7 +1,8 @@
 ﻿[CmdletBinding()]
 param(
-    [string]$OutputRoot = 'E:\TMP\switch\TOTK-builds',
-    [string]$WorkDir = 'E:\TMP\switch\totk-windows-v9-work',
+    [string]$WorkspaceRoot = 'E:\TMP\switch\totk-workspace',
+    [string]$OutputRoot = '',
+    [string]$WorkDir = '',
     [ValidateRange(1, 64)][int]$Jobs = 4,
     [switch]$CheckOnly
 )
@@ -9,21 +10,25 @@ param(
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 
-# Local paths. Change these if the game, firmware or tools are moved.
-$gameBase = 'E:\TMP\switch\totk.nsp'
-$gameUpdate = 'E:\TMP\switch\totk1.4.3.nsp'
-$keys = 'E:\TMP\switch\prod.keys'
-$firmware = 'E:\TMP\Firmware.22.1.0'
-$toolsRoot = 'E:\TMP\workspace\nxnative\.webui-data\tools'
+# All external inputs and tools belong to the selected workspace.
+$WorkspaceRoot = [IO.Path]::GetFullPath($WorkspaceRoot)
+if (-not $OutputRoot) { $OutputRoot = Join-Path $WorkspaceRoot 'output\full-builds' }
+if (-not $WorkDir) { $WorkDir = Join-Path $WorkspaceRoot 'cache\full-build' }
+$gameBase = Join-Path $WorkspaceRoot 'inputs\games\TOTK-base.nsp'
+$gameUpdate = Join-Path $WorkspaceRoot 'inputs\games\TOTK-update-1.4.3.nsp'
+$keys = Join-Path $WorkspaceRoot 'inputs\keys\prod.keys'
+$firmware = Join-Path $WorkspaceRoot 'inputs\firmware'
+$toolsRoot = Join-Path $WorkspaceRoot 'tools'
 $llvm = Join-Path $toolsRoot 'ios-cross\toolchain\windows\iphone\bin'
 $sdk = Join-Path $toolsRoot 'ios-cross\iPhoneOS26.5.sdk'
 $dotnet = Join-Path $toolsRoot 'dotnet\dotnet.exe'
-$python = 'E:\TMP\switch\totk-windows-tools\venv314\Scripts\python.exe'
-$cmake = 'E:\TMP\switch\totk-windows-tools\venv314\Scripts\cmake.exe'
-$ninja = 'E:\TMP\switch\totk-windows-tools\venv314\Scripts\ninja.exe'
-$bash = 'C:\Program Files\Git\bin\bash.exe'
+$python = Join-Path $toolsRoot 'python\venv\Scripts\python.exe'
+$cmake = Join-Path $toolsRoot 'python\venv\Scripts\cmake.exe'
+$ninja = Join-Path $toolsRoot 'python\venv\Scripts\ninja.exe'
+$bash = Join-Path $toolsRoot 'git\bin\bash.exe'
 $make = Join-Path $llvm '..\busybox\bin\make.exe'
-$metal = 'E:\TMP\APPLE\Metal Developer Tools\bin\metal.exe'
+$metal = Join-Path $toolsRoot 'metal\bin\metal.exe'
+$env:PATH = "$(Join-Path $toolsRoot 'git\cmd');$(Join-Path $toolsRoot 'git\bin');$env:PATH"
 $metallib = Join-Path (Split-Path -Parent $metal) 'metallib.exe'
 $builder = Join-Path $PSScriptRoot 'games\totk\ios\tools\build_ipa_windows.py'
 
@@ -125,7 +130,7 @@ try {
         # Route native stdout and stderr through PowerShell so the transcript records both.
         # Windows PowerShell turns native stderr into error records; do not stop on warnings.
         $ErrorActionPreference = 'Continue'
-        & $python -u $builder @buildArgs 2>&1 | ForEach-Object { "$_" }
+        & $python -X utf8 -u $builder @buildArgs 2>&1 | ForEach-Object { "$_" }
         $buildStatus = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $previousErrorAction

@@ -14,7 +14,7 @@
 static int failures, checks;
 #define CHECK(cond, ...) do { checks++; if (!(cond)) { failures++; fprintf(stderr, "FAIL: " __VA_ARGS__); fputc('\n', stderr); } } while (0)
 
-static const uint8_t TEXT[4] = {120, 255, 80, 255}, BOX[4] = {12, 12, 12, 255};
+static const uint8_t TEXT[4] = {120, 255, 80, 255}, BOX[4] = {24, 24, 24, 160};
 static uint8_t px[FPS_OVERLAY_TEX_W * FPS_OVERLAY_TEX_H * 4];
 
 /* "FPS 60" at scale 1, written out pixel by pixel (glyph columns separated by one blank column). */
@@ -73,6 +73,9 @@ static void colours(int w, int h, int *green, int *yellow) {
 
 int main(void) {
     int w, h, green, yellow;
+    CHECK(BOX[0] == BOX[1] && BOX[1] == BOX[2] && BOX[3] > 0 && BOX[3] < 255 && BOX[0] < BOX[3],
+          "HUD background must be premultiplied translucent grey");
+    CHECK(BOX[0] + (255 - BOX[3]) > BOX[0], "HUD background must retain some of the picture behind it");
     setenv("TOTK_UI_LANG", "zh", 1);   /* the Chinese labels below; the English ones are checked after them */
     /* The 5x7 pixel font (lines of ASCII only: the bottom-right load line): glyph pixels against the written patterns. */
     fps_overlay_raster_line("FPS 60  8x9", 0, 1, px, &w, &h);

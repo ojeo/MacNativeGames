@@ -15,9 +15,9 @@ Windows 构建工具面向《塞尔达传说：王国之泪》1.4.3，使用本�
 
 ## 一键构建
 
-在本机双击仓库根目录的 `Build-TOTK-iOS.cmd`。它会调用 `Build-TOTK-iOS.ps1`，复用 `E:\TMP\switch\totk-windows-v9-work` 中的缓存，并在 `E:\TMP\switch\TOTK-builds\TOTK-yyyyMMdd-HHmmss` 创建新的结果文件夹（不覆盖以前的结果）。构建窗口在完成或失败后会等待按键。
+在本机双击仓库根目录的 `Build-TOTK-iOS.cmd`。它会调用 `Build-TOTK-iOS.ps1`，默认使用 `E:\TMP\switch\totk-workspace` 下的输入、工具和缓存，并在其 `output\full-builds` 中创建新的结果文件夹（不覆盖以前的结果）。构建窗口在完成或失败后会等待按键。
 
-每个结果文件夹包含未签名的 `TOTK-v143.ipa`、`TOTK-v143.entitlements.plist`、单独存放 ROM 和 shader 的 `TOTK-v143-GameData`、`verification.json` 和 `build.log`。输出会随实际完成的阶段生成；失败时查看 `build.log`。工作目录通过目录链接使用了 `totk-windows-work` 和 `totk-windows-tools` 中的部分文件，复用时需要保留它们。
+每个结果文件夹包含未签名的 `TOTK-v143.ipa`、`TOTK-v143.entitlements.plist`、单独存放 ROM 和 shader 的 `TOTK-v143-GameData`、`verification.json` 和 `build.log`。输出会随实际完成的阶段生成；失败时查看 `build.log`。也可运行 `Build-TOTK-Organized.ps1`，使用已有的 1.4.3 代码和资源快速重新编译；该入口不重新生成游戏代码或 shader。
 
 也可在 PowerShell 中仅检查路径，或指定结果目录和主程序编译的并行任务数：
 
@@ -26,26 +26,27 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'E:\TMP\workspace\MacNat
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'E:\TMP\workspace\MacNativeGames\Build-TOTK-iOS.ps1' -OutputRoot 'E:\TMP\switch\MyBuilds' -Jobs 4
 ```
 
-PowerShell 脚本开头列出了游戏、固件和工具路径，位置改变后可在那里修改。`-WorkDir` 可指定其他绝对路径；工作目录、SDK 和 LLVM 工具链路径不能包含空格。`-Jobs` 控制主程序及依赖的编译并行度，shader 编译会自行选择并行度。shader 输入改变时，工具会保留旧设备种子并使用新的种子目录；Metal 库通过内容哈希共享缓存。
+`-WorkspaceRoot` 可指定统一目录，`-WorkDir` 可指定其他缓存目录；工作目录、SDK 和 LLVM 工具链路径不能包含空格。`-Jobs` 控制主程序及依赖的编译并行度，shader 编译会自行选择并行度。shader 输入改变时，工具会保留旧设备种子并使用新的种子目录；Metal 库通过内容哈希共享缓存。
 
 ## 手动构建示例
 
 以下示例使用本机 `E:\TMP` 下已有的工具。在 `E:\TMP\workspace\MacNativeGames` 中打开 PowerShell 后运行；如你的路径不同，请相应修改参数：
 
 ```powershell
-$tools = 'E:\TMP\workspace\nxnative\.webui-data\tools'
+$root = 'E:\TMP\switch\totk-workspace'
+$tools = "$root\tools"
 $llvm = "$tools\ios-cross\toolchain\windows\iphone\bin"
-$py = 'E:\TMP\switch\totk-windows-tools\venv314\Scripts\python.exe'
+$py = "$tools\python\venv\Scripts\python.exe"
 & $py games/totk/ios/tools/build_ipa_windows.py `
-  --base 'E:\TMP\switch\totk.nsp' --update 'E:\TMP\switch\totk1.4.3.nsp' `
-  --keys 'E:\TMP\switch\prod.keys' --firmware 'E:\TMP\Firmware.22.1.0' `
+  --base "$root\inputs\games\TOTK-base.nsp" --update "$root\inputs\games\TOTK-update-1.4.3.nsp" `
+  --keys "$root\inputs\keys\prod.keys" --firmware "$root\inputs\firmware" `
   --sdk "$tools\ios-cross\iPhoneOS26.5.sdk" --toolchain $llvm `
-  --metal 'E:\TMP\APPLE\Metal Developer Tools\bin\metal.exe' `
+  --metal "$tools\metal\bin\metal.exe" `
   --dotnet "$tools\dotnet\dotnet.exe" `
-  --cmake 'E:\TMP\switch\totk-windows-tools\venv314\Scripts\cmake.exe' `
-  --ninja 'E:\TMP\switch\totk-windows-tools\venv314\Scripts\ninja.exe' `
-  --bash 'C:\Program Files\Git\bin\bash.exe' --make "$llvm\..\busybox\bin\make.exe" `
-  --work 'E:\TMP\switch\TOTK-windows-build' --out 'E:\TMP\switch\TOTK.ipa'
+  --cmake "$tools\python\venv\Scripts\cmake.exe" `
+  --ninja "$tools\python\venv\Scripts\ninja.exe" `
+  --bash "$tools\git\bin\bash.exe" --make "$llvm\..\busybox\bin\make.exe" `
+  --work "$root\cache\full-build" --out "$root\output\TOTK.ipa"
 ```
 
 工具会拒绝与仓库记录的 1.4.3 哈希不匹配的游戏代码或 RomFS 镜像。上例会在输出位置生成：

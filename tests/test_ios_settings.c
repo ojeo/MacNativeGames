@@ -2,9 +2,25 @@
 #include "settings_map.h"
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 
 static int failures;
 static int wants(const char *got, const char *want);
+
+static void auto_start(void) {
+    if (totk_auto_start(NULL, 0) || !totk_auto_start(NULL, 1) || !totk_auto_start("", 1) ||
+        !totk_auto_start("0", 0) || !totk_auto_start("0", 1) ||
+        totk_auto_start("1", 0) || totk_auto_start("1", 1)) {
+        failures++; fprintf(stderr, "auto-start preference or launch override differs\n");
+    }
+    if (fabsf(totk_touch_opacity(0, 0) - 0.32f) > 0.0001f ||
+        fabsf(totk_touch_opacity(NAN, 1) - 0.32f) > 0.0001f ||
+        fabsf(totk_touch_opacity(-1, 1) - 0.1f) > 0.0001f ||
+        fabsf(totk_touch_opacity(2, 1) - 1.0f) > 0.0001f ||
+        fabsf(totk_touch_opacity(0.64f, 1) - 0.64f) > 0.0001f) {
+        failures++; fprintf(stderr, "touch opacity default or clamping differs\n");
+    }
+}
 
 static void picture(const char *mode, const char *drawable, const char *output, const char *operation,
                     const char *scene_upscale) {
@@ -107,6 +123,7 @@ int main(int argc, char **argv) {
     }
     /* The custom layer: the picture mode owns the drawable, the output upscale and the operation mode (1080 runs the
        game's docked settings); the MetalFX entry also forces the scene upscale on, which the output upscale needs. */
+    auto_start();
     picture("720", "720", "0", "handheld", NULL);
     picture("1080", "1080", "0", "docked", NULL);
     picture("mfx", "0", "1", "handheld", "1");

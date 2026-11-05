@@ -13,6 +13,8 @@ enum { FPS_OVERLAY_TEX_W = 768, FPS_OVERLAY_TEX_H = 64, FPS_OVERLAY_MAX_SCALE = 
 typedef struct { int fps, screen_w, screen_h, mfx, gen, big, scene_w, scene_h; } fps_overlay_info;   // screen: the output; scene: 0 = not known
 
 int fps_overlay_enabled(void);
+void fps_overlay_set_enabled(int on);
+void shader_overlay_set_enabled(int on);
 /* Shared user toggle for every in-picture HUD layer: FPS, shader collection and load telemetry. */
 /* The settings panel (key 1): HUD_MODE_ALL (FPS, shader collection, load), HUD_MODE_MINIMAL (FPS only) or HUD_MODE_OFF. */
 enum { HUD_MODE_OFF = 0, HUD_MODE_ALL = 1, HUD_MODE_MINIMAL = 2 };

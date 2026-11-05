@@ -38,11 +38,25 @@ int wmain(int argc, wchar_t **argv) {
     size_t text_size = (text_end + 0x3fff) & ~(size_t)0x3fff;
     f = _wfopen(argv[2], L"rb");
     if (!f || fread(base, 1, text_size, f) != text_size || fgetc(f) != EOF || fclose(f)) return 6;
+    /* The iOS image also contains exported veneers in the signed patch area. */
+    size_t patch_size = pages - (size_t)patch_off;
+    f = _wfopen(argv[3], L"rb");
+    if (!f || fread(base + patch_off, 1, patch_size, f) != patch_size || fgetc(f) != EOF || fclose(f)) return 6;
 #endif
     Module m = {.name="main", .base=base, .size=pages+0x4000, .file_size=size,
                 .text_end=text_end, .ro_off=ro_off, .data_off=data_off, .patch_off=patch_off};
+#ifdef TOTK_VERIFY_IOS
+    /* A saved choice can arrive before the game thread maps the module. */
+    runtime_cheat_set(3);
+#endif
     runtime_game_patches(&m);
 #ifdef TOTK_VERIFY_IOS
+    uint32_t flags; memcpy(&flags,base+pages+0x80,sizeof flags);
+    if (!runtime_cheat_hooks_ready() || flags != (3u & runtime_cheat_hooks_available())) return 9;
+    runtime_cheat_set(4); memcpy(&flags,base+pages+0x80,sizeof flags);
+    if (flags != (4u & runtime_cheat_hooks_available())) return 9;
+    runtime_cheat_set(0); memcpy(&flags,base+pages+0x80,sizeof flags);
+    if (flags) return 9;
     _aligned_free(base);
     return 0;
 #else

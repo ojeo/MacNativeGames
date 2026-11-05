@@ -12,31 +12,36 @@ network access for pinned source checkouts and the LibHac NuGet package. Use a w
 for the extracted image, the shader cache and the final copy of the image.
 
 To build with the paths on this machine, double-click `Build-TOTK-iOS.cmd` in the repository root. It runs
-`Build-TOTK-iOS.ps1`, keeps the existing work cache, and creates a new timestamped folder under
-`E:\TMP\switch\TOTK-builds` with the IPA, external GameData, requested entitlements, `build.log` and
+`Build-TOTK-iOS.ps1`, uses `E:\TMP\switch\totk-workspace` for inputs, tools and cache, and creates a new timestamped folder under
+`E:\TMP\switch\totk-workspace\output\full-builds` with the IPA, external GameData, requested entitlements, `build.log` and
 `verification.json`. The output is unsigned. To check prerequisites without building, run
 `powershell -ExecutionPolicy Bypass -File .\Build-TOTK-iOS.ps1 -CheckOnly`.
 
-The PowerShell script accepts `-OutputRoot`, `-WorkDir` and `-Jobs`; its other local paths are listed at the top of
-the script. When shader inputs change, the builder preserves the old device seed and creates a separate one, while
+The PowerShell script accepts `-WorkspaceRoot`, `-OutputRoot`, `-WorkDir` and `-Jobs`. For a faster rebuild using
+the verified 1.4.3 exported game code and existing resources, use `Build-TOTK-Organized.ps1` in the repository root.
+Its output is unsigned and it verifies the IPA and external data. It does not regenerate game code or shaders.
+After moving the workspace, run `Setup-TOTK-Python.ps1 -WorkspaceRoot <new-path>` to recreate its virtual
+environment from the local wheelhouse; the script preserves the previous environment as a backup.
+When shader inputs change, the full builder preserves the old device seed and creates a separate one, while
 reusing content-addressed Metal libraries where possible.
 
 For example, to invoke the Python builder directly using tools already installed under `E:\TMP`:
 
 ```powershell
-$tools = 'E:\TMP\workspace\nxnative\.webui-data\tools'
+$root = 'E:\TMP\switch\totk-workspace'
+$tools = "$root\tools"
 $llvm = "$tools\ios-cross\toolchain\windows\iphone\bin"
-$py = 'E:\TMP\switch\totk-windows-tools\venv314\Scripts\python.exe'
+$py = "$tools\python\venv\Scripts\python.exe"
 & $py games/totk/ios/tools/build_ipa_windows.py `
-  --base 'E:\TMP\switch\totk.nsp' --update 'E:\TMP\switch\totk1.4.3.nsp' `
-  --keys 'E:\TMP\switch\prod.keys' --firmware 'E:\TMP\Firmware.22.1.0' `
+  --base "$root\inputs\games\TOTK-base.nsp" --update "$root\inputs\games\TOTK-update-1.4.3.nsp" `
+  --keys "$root\inputs\keys\prod.keys" --firmware "$root\inputs\firmware" `
   --sdk "$tools\ios-cross\iPhoneOS26.5.sdk" --toolchain $llvm `
-  --metal 'E:\TMP\APPLE\Metal Developer Tools\bin\metal.exe' `
+  --metal "$tools\metal\bin\metal.exe" `
   --dotnet "$tools\dotnet\dotnet.exe" `
-  --cmake 'E:\TMP\switch\totk-windows-tools\venv314\Scripts\cmake.exe' `
-  --ninja 'E:\TMP\switch\totk-windows-tools\venv314\Scripts\ninja.exe' `
-  --bash 'C:\Program Files\Git\bin\bash.exe' --make "$llvm\..\busybox\bin\make.exe" `
-  --work 'E:\TMP\switch\TOTK-windows-build' --out 'E:\TMP\switch\TOTK.ipa'
+  --cmake "$tools\python\venv\Scripts\cmake.exe" `
+  --ninja "$tools\python\venv\Scripts\ninja.exe" `
+  --bash "$tools\git\bin\bash.exe" --make "$llvm\..\busybox\bin\make.exe" `
+  --work "$root\cache\full-build" --out "$root\output\TOTK.ipa"
 ```
 
 The builder rejects game code and RomFS images that do not match the repository's 1.4.3 hashes. It creates

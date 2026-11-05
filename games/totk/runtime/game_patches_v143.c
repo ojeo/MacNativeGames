@@ -76,6 +76,66 @@ static uint32_t branch(uint64_t pc,uint64_t target){
     if((delta&3)||delta<-(1<<27)||delta>=(1<<27))runtime_fail("1.4.3 patch branch outside range");
     return 0x14000000|(((uint32_t)(delta>>2))&0x3ffffff);
 }
+
+/* iOS cheats use the signed image's guarded veneers and a private writable flag word. These 1.4.3 paths follow the
+   reference implementation; gameplay and object identity have not yet been independently verified on a device. */
+enum { CHEAT_DATA_SLOT = 0x80, CHEAT_STAMINA = 4, CHEAT_HEALTH = 1, CHEAT_BATTERY = 2 };
+static _Atomic uint32_t *cheat_flags;
+static _Atomic unsigned cheat_valid, cheat_ready;
+static atomic_flag cheat_lock = ATOMIC_FLAG_INIT;
+static unsigned cheat_requested;
+static void cheat_take(void) { while(atomic_flag_test_and_set_explicit(&cheat_lock,memory_order_acquire)) {} }
+static void cheat_release(void) { atomic_flag_clear_explicit(&cheat_lock,memory_order_release); }
+unsigned runtime_cheat_hooks_available(void) { return atomic_load_explicit(&cheat_valid,memory_order_acquire); }
+int runtime_cheat_hooks_ready(void) { return atomic_load_explicit(&cheat_ready,memory_order_acquire); }
+void runtime_cheat_set(unsigned flags) {
+    cheat_take(); cheat_requested=flags&7;
+    if(cheat_flags) atomic_store_explicit(cheat_flags,cheat_requested & atomic_load_explicit(&cheat_valid,memory_order_relaxed),memory_order_release);
+    cheat_release();
+}
+static void patch_ios_cheat_probes(Module *m) {
+#if !TARGET_OS_IPHONE
+    if (!getenv("TOTK_EXPORT_IOS")) return;
+#endif
+    uint64_t data=(m->file_size+0x3fff)&~0x3fffULL, stub=((m->file_size+15)&~15ULL)+1024;
+    enum { STRIDE=64, N=3 };
+    const uint64_t site[N]={0x4407d0,0x782274,0x31d398};
+    const uint32_t original[N]={0xf9400008,0x35001738,0x1f080800};
+    const unsigned bit[N]={CHEAT_HEALTH,CHEAT_BATTERY,CHEAT_STAMINA};
+    if(data+CHEAT_DATA_SLOT+4>m->size || stub+N*STRIDE>data) { fprintf(stderr,"[totk] cheat probes: no safe veneer space\n"); atomic_store_explicit(&cheat_ready,1,memory_order_release); return; }
+    uint32_t code[N][STRIDE/4]={{0}};
+    uint64_t h=stub,b=stub+STRIDE,s=stub+2*STRIDE;
+    uint32_t health[]={adrp(8,(uintptr_t)m->base+h,(uintptr_t)m->base+data),0x91020108,0x88dffd08,
+        0x36000088,0xb9401808,0x34000048,0xb9000808,0xf9400008,branch(h+32,site[0]+4)};
+    uint32_t battery[]={0xa9bf27e8,adrp(8,(uintptr_t)m->base+b+4,(uintptr_t)m->base+data),0x91020108,0x88dffd08,
+        0x360800a8,0x1e204048,0xbd004668,0xa8c127e8,branch(b+32,0x782280),
+        0xa8c127e8,0x34000058,branch(b+44,0x782558),branch(b+48,0x782278)};
+    uint32_t stamina[]={0xa9bf27e8,adrp(8,(uintptr_t)m->base+s+4,(uintptr_t)m->base+data),0x91020108,0x88dffd08,
+        0x36100068,0x1e204040,0x14000002,0x1f080800,0xa8c127e8,branch(s+36,site[2]+4)};
+    memcpy(code[0],health,sizeof health);memcpy(code[1],battery,sizeof battery);memcpy(code[2],stamina,sizeof stamina);
+    unsigned sizes[N]={sizeof health,sizeof battery,sizeof stamina}; unsigned valid=0;
+    for(unsigned i=0;i<N;i++) {
+        uint32_t got,jump=branch(site[i],stub+i*STRIDE); memcpy(&got,m->base+site[i],4);
+#if TARGET_OS_IPHONE
+        if(got==original[i]) { fprintf(stderr,"[totk] cheat probe %u: not installed\n",bit[i]); continue; }
+        /* A branch into a mismatched signed veneer cannot be disabled safely at runtime. */
+        if(got!=jump || memcmp(m->base+stub+i*STRIDE,code[i],sizes[i])) runtime_fail("1.4.3 embedded cheat probe mismatch");
+#else
+        if(got!=original[i]) { fprintf(stderr,"[totk] cheat probe %u: original instruction mismatch\n",bit[i]); continue; }
+        unsigned k; for(k=0;k<sizes[i] && !m->base[stub+i*STRIDE+k];k++) {}
+        if(k!=sizes[i]) { fprintf(stderr,"[totk] cheat probe %u: veneer space occupied\n",bit[i]); continue; }
+        memcpy(m->base+stub+i*STRIDE,code[i],sizes[i]);memcpy(m->base+site[i],&jump,4);
+#endif
+        valid|=bit[i];
+    }
+    cheat_take();
+    cheat_flags=(_Atomic uint32_t *)(void *)(m->base+data+CHEAT_DATA_SLOT);
+    atomic_store_explicit(&cheat_valid,valid,memory_order_relaxed);
+    atomic_store_explicit(cheat_flags,cheat_requested & valid,memory_order_release);
+    atomic_store_explicit(&cheat_ready,1,memory_order_release);
+    cheat_release();
+    fprintf(stderr,"[totk] cheat probes installed: mask %#x\n",valid);
+}
 /* The actor animation update has a second, unscaled clock for cloth/hair
  * (ordinary animation already receives FrameRateMgr's real-time step). Its
  * explicit time-factor path still constructs {factor / 30, factor} every
@@ -1158,6 +1218,7 @@ void runtime_game_patches(Module *m) {
     patch_fixed_res(m);
     patch_slowmo_bounce(m);
     patch_fade_increment(m);
+    patch_ios_cheat_probes(m);
 #if !TARGET_OS_IPHONE && !defined(TOTK_OFFLINE_EXPORT)
     diag_main=m;   /* frmwatch / xpoke */
     { extern void (*g_vr_find_camera)(const float *); g_vr_find_camera=runtime_vr_find_camera; }   /* VR camera search */

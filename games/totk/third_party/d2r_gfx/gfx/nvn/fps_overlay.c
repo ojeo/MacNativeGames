@@ -13,7 +13,8 @@
 #include "include/totk_ui_lang.h"
 
 enum { GLYPH_W = 5, GLYPH_H = 7, ADVANCE = 6, PAD = 2, BOX_ROWS = GLYPH_H + 2 * PAD, MAX_CHARS = 80 };
-static const uint8_t TEXT_BGRA[4] = {120, 255, 80, 255}, BOX_BGRA[4] = {12, 12, 12, 255}, HIGHLIGHT_BGRA[4] = {40, 230, 255, 255};   // green / dark / yellow
+/* BGRA is premultiplied: the dark grey background is 38/255 at 160/255 opacity. */
+static const uint8_t TEXT_BGRA[4] = {120, 255, 80, 255}, BOX_BGRA[4] = {24, 24, 24, 160}, HIGHLIGHT_BGRA[4] = {40, 230, 255, 255};
 
 typedef struct { char c; uint8_t rows[GLYPH_H]; } Glyph;   /* each row: 5 bits, bit 4 = leftmost pixel */
 static const Glyph FONT[] = {
@@ -47,9 +48,12 @@ void fps_overlay_set_hud_mode(int mode) {
         atomic_store_explicit(&g_hud_mode, mode, memory_order_relaxed);
 }
 
+static _Atomic int fps_override = -1, shader_override = -1;
+void fps_overlay_set_enabled(int on) { atomic_store(&fps_override, !!on); }
+void shader_overlay_set_enabled(int on) { atomic_store(&shader_override, !!on); }
 int fps_overlay_enabled(void) {
-    static int on = -1;
-    if (on < 0) { const char *e = getenv("TOTK_FPS_OVERLAY"); on = !(e && !strcmp(e, "0")); }
+    int on = atomic_load(&fps_override);
+    if (on < 0) { const char *e = getenv("TOTK_FPS_OVERLAY"); return !(e && !strcmp(e, "0")); }
     return on;
 }
 
@@ -200,7 +204,7 @@ int hud_snapshot(int line, char *out, size_t n, int *highlight) {
 }
 
 int shader_overlay_enabled(void) {
-    static int on = -1;
+    int on = atomic_load(&shader_override);
     /* On by default on the iPhone too since it shows the render pipelines (user 2026-10-22: only the FPS was there when the
        game was opened from the home screen); it was off there because the phone translates no shaders. */
     const int def = 1;
